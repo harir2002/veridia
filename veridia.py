@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python   
 # -*- coding: utf-8 -*-
 import streamlit as st
@@ -32,6 +31,8 @@ from veridia1 import *
 from datetime import date
 import concurrent.futures
 from dateutil.relativedelta import relativedelta
+from veridia1 import ProcessVeridia
+import demjson3  # type: ignore
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -59,38 +60,305 @@ API_KEY = os.getenv("API_KEY_1")
 LOGIN_URL = "https://dms.asite.com/apilogin/"
 IAM_TOKEN_URL = "https://iam.cloud.ibm.com/identity/token"
 
-import time
-from functools import wraps
-import streamlit as st
+# Initialize session state in a centralized function
+def initialize_session_state():
+    """Centralized session state initialization to prevent auto-refreshes"""
+    if 'initialized' not in st.session_state:
+        st.session_state.initialized = True
+        
+        # Core session state variables
+        st.session_state.sessionid = None
+        st.session_state.workspaceid = None
+        
+        # Asite data variables
+        st.session_state.veridiafinishing = None
+        st.session_state.veridiastructure = None
+        st.session_state.veridiaexternal = None
+        st.session_state.veridialift = None
+        st.session_state.veridiacommonarea = None
+        
+        # Activity data variables
+        st.session_state.finishing_activity_data = None
+        st.session_state.structure_activity_data = None
+        st.session_state.external_activity_data = None
+        st.session_state.lift_activity_data = None
+        st.session_state.common_area_activity_data = None
+        
+        # Location data variables
+        st.session_state.finishing_location_data = None
+        st.session_state.structure_location_data = None
+        st.session_state.external_location_data = None
+        st.session_state.lift_location_data = None
+        st.session_state.common_area_location_data = None
+        
+        # COS data variables
+        st.session_state.cos_df_tower4a = None
+        st.session_state.cos_df_tower4b = None
+        st.session_state.cos_df_tower5 = None
+        st.session_state.cos_df_tower7 = None
+        st.session_state.cos_tname_tower4a = None
+        st.session_state.cos_tname_tower4b = None
+        st.session_state.cos_tname_tower5 = None
+        st.session_state.cos_tname_tower7 = None
+        
+        # COS client variables
+        st.session_state.cos_client = None
+        st.session_state.bucket_name = None
+        st.session_state.file_list = None
+        
+        # Slab data variables
+        st.session_state.slabreport = pd.DataFrame()
+        st.session_state.slab_df = pd.DataFrame()
+        
+        # Configuration variables
+        st.session_state.ignore_month = False
+        st.session_state.ignore_year = False
+        
+        # AI response
+        st.session_state.ai_response = None
+        
+        # Progress tracking
+        st.session_state.progress = 0
+        st.session_state.current_step = ""
+        st.session_state.data_fetch_complete = False
 
-def function_timer(show_args=False):
-    """Decorator to measure and display function execution time"""
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            # Start timer
-            start_time = time.time()
-            
-            # Call the original function
-            result = func(*args, **kwargs)
-            
-            # Calculate duration
-            duration = time.time() - start_time
-            
-            # Display timing info
-            func_name = func.__name__.replace('_', ' ').title()
-            arg_info = ""
-            if show_args and args:
-                arg_info = f" with args: {args[1:]}"  # Skip self if present
-            
-            st.info(f"⏱️ {func_name}{arg_info} executed in {duration:.2f} seconds")
-            
-            return result
-        return wrapper
-    return decorator
+# Call initialization at the start
+initialize_session_state()
+
+# Progress tracking functions
+def update_progress(progress, step):
+    """Update progress without triggering reruns"""
+    st.session_state.progress = progress
+    st.session_state.current_step = step
+
+def show_progress():
+    """Display progress bar and current step"""
+    if st.session_state.progress > 0:
+        st.progress(st.session_state.progress / 100)
+        st.info(f"🔄 {st.session_state.current_step} ({st.session_state.progress}%)")
+
+# Safe logging function that doesn't trigger reruns
+def safe_log(message, level="info"):
+    """Log messages without using st.write during data fetching"""
+    if level == "info":
+        logger.info(message)
+    elif level == "error":
+        logger.error(message)
+    elif level == "warning":
+        logger.warning(message)
+    elif level == "debug":
+        logger.debug(message)
+
+# Forward declaration to fix "name not defined" error
+async def initialize_and_fetch_data(email, password):
+    # Reset progress at start
+    update_progress(0, "Starting initialization...")
+    
+    with st.spinner("Starting initialization and data fetching process..."):
+        # Step 1: Login
+        if not email or not password:
+            st.sidebar.error("Please provide both email and password!")
+            return False
+        try:
+            update_progress(5, "Logging in...")
+            session_id = await login_to_asite(email, password)
+            if not session_id:
+                st.sidebar.error("Login failed!")
+                return False
+            st.sidebar.success("Login successful!")
+        except Exception as e:
+            st.sidebar.error(f"Login failed: {str(e)}")
+            return False
+
+        # Step 2: Get Workspace ID
+        try:
+            update_progress(10, "Fetching Workspace ID...")
+            await GetWorkspaceID()
+            st.sidebar.success("Workspace ID fetched successfully!")
+        except Exception as e:
+            st.sidebar.error(f"Failed to fetch Workspace ID: {str(e)}")
+            return False
+
+        # Step 3: Get Project IDs
+        try:
+            update_progress(15, "Fetching Project IDs...")
+            await GetProjectId()
+            st.sidebar.success("Project IDs fetched successfully!")
+        except Exception as e:
+            st.sidebar.error(f"Failed to fetch Project IDs: {str(e)}")
+            return False
+
+        # Step 4: Get All Data
+        try:
+            update_progress(20, "Fetching All Data...")
+            veridiafinishing, veridiastructure, veridiaexternal, veridialift, veridiacommonarea = await GetAllDatas()
+            st.session_state.veridiafinishing = veridiafinishing
+            st.session_state.veridiastructure = veridiastructure
+            st.session_state.veridiaexternal = veridiaexternal  
+            st.session_state.veridialift = veridialift
+            st.session_state.veridiacommonarea = veridiacommonarea
+            st.sidebar.success("All Data fetched successfully!")
+            safe_log(f"Stored veridiafinishing: {len(veridiafinishing)} records, veridiastructure: {len(veridiastructure)} records, veridiaexternal: {len(veridiaexternal)} records, veridialift: {len(veridialift)} records, veridia_common_area: {len(veridiacommonarea)} records")
+        except Exception as e:
+            st.sidebar.error(f"Failed to fetch All Data: {str(e)}")
+            safe_log(f"Failed to fetch All Data: {str(e)}", "error")
+            return False
+
+        # Step 5: Get Activity Data
+        try:
+            update_progress(40, "Fetching Activity Data...")
+            finishing_activity_data, structure_activity_data, external_activity_data, lift_activity_data, common_area_activity_data = await Get_Activity()
+            # Validate DataFrames
+            activity_dataframes = {
+                "finishing_activity_data": finishing_activity_data,
+                "structure_activity_data": structure_activity_data,
+                "external_activity_data": external_activity_data,
+                "lift_activity_data": lift_activity_data,
+                "common_area_activity_data": common_area_activity_data
+            }
+            for name, df in activity_dataframes.items():
+                if df is None:
+                    safe_log(f"{name} is None", "error")
+                    raise ValueError(f"{name} is None")
+                if not isinstance(df, pd.DataFrame):
+                    safe_log(f"{name} is not a DataFrame: {type(df)}", "error")
+                    raise ValueError(f"{name} is not a valid DataFrame")
+                safe_log(f"{name} has {len(df)} records, empty: {df.empty}")
+                if df.empty:
+                    safe_log(f"{name} is empty", "warning")
+            # Store in session state
+            st.session_state.finishing_activity_data = finishing_activity_data
+            st.session_state.structure_activity_data = structure_activity_data
+            st.session_state.external_activity_data = external_activity_data
+            st.session_state.lift_activity_data = lift_activity_data
+            st.session_state.common_area_activity_data = common_area_activity_data
+            st.sidebar.success("Activity Data fetched successfully!")
+            safe_log(f"Stored activity data - Finishing: {len(finishing_activity_data)} records, "
+                        f"Structure: {len(structure_activity_data)} records, "
+                        f"External: {len(external_activity_data)} records, "
+                        f"Lift: {len(lift_activity_data)} records, "
+                        f"Common Area: {len(common_area_activity_data)} records")
+        except Exception as e:
+            st.sidebar.error(f"Failed to fetch Activity Data: {str(e)}")
+            safe_log(f"Failed to fetch Activity Data: {str(e)}\nStack trace:\n{traceback.format_exc()}", "error")
+            return False
+
+        # Step 6: Get Location/Module Data
+        try:
+            update_progress(60, "Fetching Location/Module Data...")
+            finishing_location_data, structure_location_data, external_location_data, lift_location_data, common_area_location_data = await Get_Location()
+            # Validate DataFrames
+            location_dataframes = {
+                "finishing_location_data": finishing_location_data,
+                "structure_location_data": structure_location_data,
+                "external_location_data": external_location_data,
+                "lift_location_data": lift_location_data,
+                "common_area_location_data": common_area_location_data
+            }
+            for name, df in location_dataframes.items():
+                if df is None:
+                    safe_log(f"{name} is None", "error")
+                    raise ValueError(f"{name} is None")
+                if not isinstance(df, pd.DataFrame):
+                    safe_log(f"{name} is not a DataFrame: {type(df)}", "error")
+                    raise ValueError(f"{name} is not a valid DataFrame")
+                safe_log(f"{name} has {len(df)} records, empty: {df.empty}")
+                if df.empty:
+                    safe_log(f"{name} is empty", "warning")
+            # Store in session state
+            st.session_state.finishing_location_data = finishing_location_data
+            st.session_state.structure_location_data = structure_location_data
+            st.session_state.external_location_data = external_location_data
+            st.session_state.lift_location_data = lift_location_data
+            st.session_state.common_area_location_data = common_area_location_data
+            st.sidebar.success("Location/Module Data fetched successfully!")
+            safe_log(f"Stored location data - Finishing: {len(finishing_location_data)} records, "
+                        f"Structure: {len(structure_location_data)} records, "
+                        f"External: {len(external_location_data)} records, "
+                        f"Lift: {len(lift_location_data)} records, "
+                        f"Common Area: {len(common_area_location_data)} records")
+        except Exception as e:
+            st.sidebar.error(f"Failed to fetch Location/Module Data: {str(e)}")
+            safe_log(f"Failed to fetch Location/Module Data: {str(e)}\nStack trace:\n{traceback.format_exc()}", "error")
+            return False
+        
+        # Step 7: Fetch COS Files
+        try:
+            update_progress(80, "Fetching COS files from Veridia folder...")
+            files = get_cos_files()
+            st.session_state.files = files
+            if files:
+                st.success(f"Found {len(files)} files in COS storage")
+                for selected_file in files:
+                    try:
+                        safe_log(f"Processing file: {selected_file}")
+                        cos_client = initialize_cos_client()
+                        if not cos_client:
+                            st.error("Failed to initialize COS client")
+                            continue
+                        response = cos_client.get_object(Bucket=COS_BUCKET, Key=selected_file)
+                        file_bytes = io.BytesIO(response['Body'].read())
+                        result = process_file(file_bytes, selected_file)
+                        if len(result) == 2:  # Handle Tower 4 split
+                            (df_first, tname_first), (df_second, tname_second) = result
+                            if df_first is not None and not df_first.empty:
+                                if "Tower 4(A)" in tname_first:
+                                    st.session_state.cos_df_tower4a = df_first
+                                    st.session_state.cos_tname_tower4a = tname_first
+                                    safe_log(f"Processed Data for {tname_first} - {len(df_first)} rows")
+                                elif "Tower 4(B)" in tname_first:
+                                    st.session_state.cos_df_tower4b = df_first
+                                    st.session_state.cos_tname_tower4b = tname_first
+                                    safe_log(f"Processed Data for {tname_first} - {len(df_first)} rows")
+                                elif "Tower 5" in tname_first:
+                                    st.session_state.cos_df_tower5 = df_first
+                                    st.session_state.cos_tname_tower5 = tname_first
+                                    safe_log(f"Processed Data for {tname_first} - {len(df_first)} rows")
+                            if df_second is not None and not df_second.empty:
+                                if "Tower 4(A)" in tname_second:
+                                    st.session_state.cos_df_tower4a = df_second
+                                    st.session_state.cos_tname_tower4a = tname_second
+                                    safe_log(f"Processed Data for {tname_second} - {len(df_second)} rows")
+                                elif "Tower 4(B)" in tname_second:
+                                    st.session_state.cos_df_tower4b = df_second
+                                    st.session_state.cos_tname_tower4b = tname_second
+                                    safe_log(f"Processed Data for {tname_second} - {len(df_second)} rows")
+                        elif len(result) == 1:  # Handle Tower 5
+                            (df_first, tname_first) = result[0]
+                            if df_first is not None and not df_first.empty:
+                                if "Tower 4(A)" in tname_first:
+                                    st.session_state.cos_df_tower4a = df_first
+                                    st.session_state.cos_tname_tower4a = tname_first
+                                    safe_log(f"Processed Data for {tname_first} - {len(df_first)} rows")
+                                elif "Tower 4(B)" in tname_first:
+                                    st.session_state.cos_df_tower4b = df_first
+                                    st.session_state.cos_tname_tower4b = tname_first
+                                    safe_log(f"Processed Data for {tname_first} - {len(df_first)} rows")
+                                elif "Tower 5" in tname_first:
+                                    st.session_state.cos_df_tower5 = df_first
+                                    st.session_state.cos_tname_tower5 = tname_first
+                                    safe_log(f"Processed Data for {tname_first} - {len(df_first)} rows")
+                            if "Tower 5" in selected_file:
+                                safe_log("Processed Tower 5 data successfully")
+                            else:
+                                safe_log(f"No secondary data (Tower 4 split) for {selected_file}", "warning")
+                        else:
+                            safe_log(f"Unexpected result format for {selected_file}", "warning")
+                    except Exception as e:
+                        safe_log(f"Error processing file {selected_file}: {str(e)}", "error")
+                        continue
+            else:
+                st.warning("No files found in COS storage")
+        except Exception as e:
+            st.sidebar.error(f"Failed to fetch COS files: {str(e)}")
+            safe_log(f"Failed to fetch COS files: {str(e)}", "error")
+            return False
+
+        update_progress(100, "Initialization completed!")
+        st.sidebar.success("All data fetched successfully!")
+        return True
 
 # Login Function
-@function_timer()
 async def login_to_asite(email, password):
     headers = {"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"}
     payload = {"emailId": email, "password": password}
@@ -100,28 +368,22 @@ async def login_to_asite(email, password):
             try:
                 session_id = response.json().get("UserProfile", {}).get("Sessionid")
                 if session_id:
-                    logger.info(f"Login successful, Session ID: {session_id}")
+                    safe_log(f"Login successful, Session ID: {session_id}")
                     st.session_state.sessionid = session_id
-                    st.sidebar.success(f"✅ Login successful, Session ID: {session_id}")
                     return session_id
                 else:
-                    logger.error("No Session ID found in login response")
-                    st.sidebar.error("❌ No Session ID in response")
+                    safe_log("No Session ID found in login response", "error")
                     return None
             except json.JSONDecodeError:
-                logger.error("JSONDecodeError during login")
-                st.sidebar.error("❌ Failed to parse login response")
+                safe_log("JSONDecodeError during login", "error")
                 return None
-        logger.error(f"Login failed: {response.status_code} - {response.text}")
-        st.sidebar.error(f"❌ Login failed: {response.status_code}")
+        safe_log(f"Login failed: {response.status_code} - {response.text}", "error")
         return None
     except Exception as e:
-        logger.error(f"Error during login: {str(e)}")
-        st.sidebar.error(f"❌ Login error: {str(e)}")
+        safe_log(f"Error during login: {str(e)}", "error")
         return None
 
 # Function to generate access token
-@function_timer()
 @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=2, min=10, max=60))
 def get_access_token(api_key):
     headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
@@ -130,23 +392,20 @@ def get_access_token(api_key):
     try:
         if response.status_code == 200:
             token_info = response.json()
-            logger.info("Access token generated successfully")
+            safe_log("Access token generated successfully")
             return token_info['access_token']
         else:
-            logger.error(f"Failed to get access token: {response.status_code} - {response.text}")
-            st.error(f"❌ Failed to get access token: {response.status_code} - {response.text}")
+            safe_log(f"Failed to get access token: {response.status_code} - {response.text}", "error")
             raise Exception("Failed to get access token")
     except Exception as e:
-        logger.error(f"Exception getting access token: {str(e)}")
-        st.error(f"❌ Error getting access token: {str(e)}")
+        safe_log(f"Exception getting access token: {str(e)}", "error")
         return None
 
 # Initialize COS client
-@function_timer()
 @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=1, min=4, max=10))
 def initialize_cos_client():
     try:
-        logger.info("Attempting to initialize COS client...")
+        safe_log("Attempting to initialize COS client...")
         cos_client = ibm_boto3.client(
             's3',
             ibm_api_key_id=COS_API_KEY,
@@ -159,11 +418,10 @@ def initialize_cos_client():
             ),
             endpoint_url=COS_ENDPOINT
         )
-        logger.info("COS client initialized successfully")
+        safe_log("COS client initialized successfully")
         return cos_client
     except Exception as e:
-        logger.error(f"Error initializing COS client: {str(e)}")
-        st.error(f"❌ Error initializing COS client: {str(e)}")
+        safe_log(f"Error initializing COS client: {str(e)}", "error")
         raise
 
 async def validate_session():
@@ -172,15 +430,15 @@ async def validate_session():
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=headers) as response:
             if response.status == 200:
-                logger.info("Session validated successfully")
+                safe_log("Session validated successfully")
                 return True
             else:
-                logger.error(f"Session validation failed: {response.status} - {await response.text()}")
+                safe_log(f"Session validation failed: {response.status} - {await response.text()}", "error")
                 return False
 
 async def refresh_session_if_needed():
     if 'sessionid' not in st.session_state or not st.session_state.sessionid:
-        logger.warning("No session ID found in session state, attempting login")
+        safe_log("No session ID found in session state, attempting login", "warning")
         new_session_id = await login_to_asite(os.getenv("ASITE_EMAIL"), os.getenv("ASITE_PASSWORD"))
         if new_session_id:
             st.session_state.sessionid = new_session_id
@@ -189,19 +447,18 @@ async def refresh_session_if_needed():
             raise Exception("Failed to establish initial session")
 
     if not await validate_session():
-        logger.info("Session invalid, attempting to refresh")
+        safe_log("Session invalid, attempting to refresh", "info")
         new_session_id = await login_to_asite(os.getenv("ASITE_EMAIL"), os.getenv("ASITE_PASSWORD"))
         if new_session_id:
             st.session_state.sessionid = new_session_id
-            logger.info(f"Session refreshed successfully, new Session ID: {new_session_id}")
+            safe_log(f"Session refreshed successfully, new Session ID: {new_session_id}")
             return new_session_id
         else:
             raise Exception("Failed to refresh session")
-    logger.info("Session is valid, no refresh needed")
+    safe_log("Session is valid, no refresh needed")
     return st.session_state.sessionid
 
 # Fetch Workspace ID
-@function_timer()
 async def GetWorkspaceID():
     await refresh_session_if_needed()
     url = "https://dmsak.asite.com/api/workspace/workspacelist"
@@ -212,10 +469,9 @@ async def GetWorkspaceID():
     }
     response = requests.get(url, headers=headers)
     st.session_state.workspaceid = response.json()['asiteDataList']['workspaceVO'][4]['Workspace_Id']
-    st.write(f"Workspace ID: {st.session_state.workspaceid}")
+    safe_log(f"Workspace ID: {st.session_state.workspaceid}")
 
 # Fetch Project IDs
-@function_timer()
 async def GetProjectId():
     await refresh_session_if_needed()
     url = f"https://adoddleak.asite.com/commonapi/qaplan/getQualityPlanList;searchCriteria={{'criteria': [{{'field': 'planCreationDate','operator': 6,'values': ['11-Mar-2025']}}], 'projectId': {str(st.session_state.workspaceid)}, 'recordLimit': 1000, 'recordStart': 1}}"
@@ -228,25 +484,18 @@ async def GetProjectId():
         response = requests.get(url, headers=headers)
         response.raise_for_status()
         data = response.json()
-        logger.info(f"GetProjectId response: {json.dumps(data, indent=2)}")
+        safe_log(f"GetProjectId response: {json.dumps(data, indent=2)}")
         if 'data' not in data or not data['data']:
-            st.error("❌ No project data found in GetProjectId response")
-            logger.error("No project data found in GetProjectId response")
+            safe_log("No project data found in GetProjectId response", "error")
             return
         st.session_state.veridia_Common_Area_Finishing = data['data'][2]['planId']
         st.session_state.veridia_lift = data['data'][5]['planId']
         st.session_state.veridia_external_development = data['data'][3]['planId']
         st.session_state.veridia_finishing = data['data'][4]['planId']
         st.session_state.veridia_structure = data['data'][6]['planId']
-        logger.info(f"Veridia Lift planId: {st.session_state.veridia_lift}")
-        st.write(f"Veridia - Lift Project ID: {data['data'][5]['planId']}")
-        st.write(f"Veridia - Common Area Finishing Project ID: {data['data'][2]['planId']}")
-        st.write(f"Veridia - External Development Project ID: {data['data'][3]['planId']}")
-        st.write(f"Veridia Finishing Project ID: {data['data'][4]['planId']}")
-        st.write(f"Veridia Structure Project ID: {data['data'][6]['planId']}")
+        safe_log(f"Veridia Lift planId: {st.session_state.veridia_lift}")
     except Exception as e:
-        st.error(f"❌ Error fetching Project IDs: {str(e)}")
-        logger.error(f"Error fetching Project IDs: {str(e)}")
+        safe_log(f"Error fetching Project IDs: {str(e)}", "error")
 
 # Asynchronous Fetch Function with Retry Logic
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
@@ -277,7 +526,6 @@ async def fetch_data(session, url, headers, email=None, password=None):
         raise
 
 # Fetch All Data with Async
-@function_timer()
 async def GetAllDatas():
     record_limit = 1000
     all_finishing_data = []
@@ -293,7 +541,7 @@ async def GetAllDatas():
     async with aiohttp.ClientSession() as session:
         # Fetch Veridia Finishing data
         start_record = 1
-        st.write("Fetching Veridia Finishing data...")
+        update_progress(10, "Fetching Veridia Finishing data...")
         while True:
             url = f"https://adoddleak.asite.com/commonapi/qaplan/getPlanAssociation/?projectId={st.session_state.workspaceid}&planId={st.session_state.veridia_finishing}&recordStart={start_record}&recordLimit={record_limit}"
             try:
@@ -302,25 +550,24 @@ async def GetAllDatas():
                 headers['Cookie'] = f'ASessionID={st.session_state.sessionid}'
                 data = await fetch_data(session, url, headers)
                 if data is None:
-                    st.write("No more Finishing data available (204)")
+                    safe_log("No more Finishing data available (204)")
                     break
                 if 'associationList' in data and data['associationList']:
                     all_finishing_data.extend(data['associationList'])
                 else:
                     all_finishing_data.extend(data if isinstance(data, list) else [])
-                st.write(f"Fetched {len(all_finishing_data[-record_limit:])} Finishing records (Total: {len(all_finishing_data)})")
+                safe_log(f"Fetched {len(all_finishing_data[-record_limit:])} Finishing records (Total: {len(all_finishing_data)})")
                 if len(all_finishing_data[-record_limit:]) < record_limit:
                     break
                 start_record += record_limit
                 await asyncio.sleep(1)  # Rate limiting
             except Exception as e:
-                st.error(f"❌ Error fetching Finishing data: {str(e)}")
-                logger.error(f"Finishing data fetch failed: {str(e)}")
+                safe_log(f"Error fetching Finishing data: {str(e)}", "error")
                 break
 
         # Fetch Veridia Structure data
         start_record = 1
-        st.write("Fetching Veridia Structure data...")
+        update_progress(25, "Fetching Veridia Structure data...")
         while True:
             url = f"https://adoddleak.asite.com/commonapi/qaplan/getPlanAssociation/?projectId={st.session_state.workspaceid}&planId={st.session_state.veridia_structure}&recordStart={start_record}&recordLimit={record_limit}"
             try:
@@ -328,25 +575,24 @@ async def GetAllDatas():
                 headers['Cookie'] = f'ASessionID={st.session_state.sessionid}'
                 data = await fetch_data(session, url, headers)
                 if data is None:
-                    st.write("No more Structure data available (204)")
+                    safe_log("No more Structure data available (204)")
                     break
                 if 'associationList' in data and data['associationList']:
                     all_structure_data.extend(data['associationList'])
                 else:
                     all_structure_data.extend(data if isinstance(data, list) else [])
-                st.write(f"Fetched {len(all_structure_data[-record_limit:])} Structure records (Total: {len(all_structure_data)})")
+                safe_log(f"Fetched {len(all_structure_data[-record_limit:])} Structure records (Total: {len(all_structure_data)})")
                 if len(all_structure_data[-record_limit:]) < record_limit:
                     break
                 start_record += record_limit
                 await asyncio.sleep(1)  # Rate limiting
             except Exception as e:
-                st.error(f"❌ Error fetching Structure data: {str(e)}")
-                logger.error(f"Structure data fetch failed: {str(e)}")
+                safe_log(f"Error fetching Structure data: {str(e)}", "error")
                 break
 
         # Fetch Veridia External Development data
         start_record = 1
-        st.write("Fetching Veridia External Development data...")
+        update_progress(40, "Fetching Veridia External Development data...")
         while True:
             url = f"https://adoddleak.asite.com/commonapi/qaplan/getPlanAssociation/?projectId={st.session_state.workspaceid}&planId={st.session_state.veridia_external_development}&recordStart={start_record}&recordLimit={record_limit}"
             try:
@@ -354,25 +600,24 @@ async def GetAllDatas():
                 headers['Cookie'] = f'ASessionID={st.session_state.sessionid}'
                 data = await fetch_data(session, url, headers)
                 if data is None:
-                    st.write("No more External Development data available (204)")
+                    safe_log("No more External Development data available (204)")
                     break
                 if 'associationList' in data and data['associationList']:
                     all_external_data.extend(data['associationList'])
                 else:
                     all_external_data.extend(data if isinstance(data, list) else [])
-                st.write(f"Fetched {len(all_external_data[-record_limit:])} External Development records (Total: {len(all_external_data)})")
+                safe_log(f"Fetched {len(all_external_data[-record_limit:])} External Development records (Total: {len(all_external_data)})")
                 if len(all_external_data[-record_limit:]) < record_limit:
                     break
                 start_record += record_limit
                 await asyncio.sleep(1)  # Rate limiting
             except Exception as e:
-                st.error(f"❌ Error fetching External Development data: {str(e)}")
-                logger.error(f"External Development data fetch failed: {str(e)}")
+                safe_log(f"Error fetching External Development data: {str(e)}", "error")
                 break
 
         # Fetch Veridia Lift data
         start_record = 1
-        st.write("Fetching Veridia Lift data...")
+        update_progress(55, "Fetching Veridia Lift data...")
         while True:
             url = f"https://adoddleak.asite.com/commonapi/qaplan/getPlanAssociation/?projectId={st.session_state.workspaceid}&planId={st.session_state.veridia_lift}&recordStart={start_record}&recordLimit={record_limit}"
             try:
@@ -380,25 +625,24 @@ async def GetAllDatas():
                 headers['Cookie'] = f'ASessionID={st.session_state.sessionid}'
                 data = await fetch_data(session, url, headers)
                 if data is None:
-                    st.write("No more Lift data available (204)")
+                    safe_log("No more Lift data available (204)")
                     break
                 if 'associationList' in data and data['associationList']:
                     all_lift_data.extend(data['associationList'])
                 else:
                     all_lift_data.extend(data if isinstance(data, list) else [])
-                st.write(f"Fetched {len(all_lift_data[-record_limit:])} Lift records (Total: {len(all_lift_data)})")
+                safe_log(f"Fetched {len(all_lift_data[-record_limit:])} Lift records (Total: {len(all_lift_data)})")
                 if len(all_lift_data[-record_limit:]) < record_limit:
                     break
                 start_record += record_limit
                 await asyncio.sleep(1)  # Rate limiting
             except Exception as e:
-                st.error(f"❌ Error fetching Lift data: {str(e)}")
-                logger.error(f"Lift data fetch failed: {str(e)}")
+                safe_log(f"Error fetching Lift data: {str(e)}", "error")
                 break
 
         # Fetch Veridia Common Area Finishing data
         start_record = 1
-        st.write("Fetching Veridia Common Area Finishing data...")
+        update_progress(70, "Fetching Veridia Common Area Finishing data...")
         while True:
             url = f"https://adoddleak.asite.com/commonapi/qaplan/getPlanAssociation/?projectId={st.session_state.workspaceid}&planId={st.session_state.veridia_Common_Area_Finishing}&recordStart={start_record}&recordLimit={record_limit}"
             try:
@@ -406,22 +650,22 @@ async def GetAllDatas():
                 headers['Cookie'] = f'ASessionID={st.session_state.sessionid}'
                 data = await fetch_data(session, url, headers)
                 if data is None:
-                    st.write("No more Common Area Finishing data available (204)")
+                    safe_log("No more Common Area Finishing data available (204)")
                     break
                 if 'associationList' in data and data['associationList']:
                     all_common_area_finishing.extend(data['associationList'])
                 else:
                     all_common_area_finishing.extend(data if isinstance(data, list) else [])
-                st.write(f"Fetched {len(all_common_area_finishing[-record_limit:])} Common Area Finishing records (Total: {len(all_common_area_finishing)})")
+                safe_log(f"Fetched {len(all_common_area_finishing[-record_limit:])} Common Area Finishing records (Total: {len(all_common_area_finishing)})")
                 if len(all_common_area_finishing[-record_limit:]) < record_limit:
                     break
                 start_record += record_limit
                 await asyncio.sleep(1)  # Rate limiting
             except Exception as e:
-                st.error(f"❌ Error fetching Common Area Finishing data: {str(e)}")
-                logger.error(f"Common Area Finishing data fetch failed: {str(e)}")
+                safe_log(f"Error fetching Common Area Finishing data: {str(e)}", "error")
                 break
 
+    update_progress(85, "Processing fetched data...")
     df_finishing = pd.DataFrame(all_finishing_data)
     df_structure = pd.DataFrame(all_structure_data)
     df_external = pd.DataFrame(all_external_data)
@@ -440,7 +684,7 @@ async def GetAllDatas():
         df_common_area['statusName'] = df_common_area['statusColor'].map(status_mapping).fillna('Unknown')
         desired_columns.append('statusName')
     else:
-        st.error("❌ Neither statusName nor statusColor found in data!")
+        safe_log("Neither statusName nor statusColor found in data!", "error")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     veridia_finishing = df_finishing[desired_columns]
@@ -449,27 +693,22 @@ async def GetAllDatas():
     veridia_lift = df_lift[desired_columns]
     veridia_common_area = df_common_area[desired_columns]
 
-    st.write(f"VERIDIA FINISHING ({', '.join(desired_columns)})")
-    st.write(f"Total records: {len(veridia_finishing)}")
-    st.write(veridia_finishing)
-    st.write(f"VERIDIA STRUCTURE ({', '.join(desired_columns)})")
-    st.write(f"Total records: {len(veridia_structure)}")
-    st.write(veridia_structure)
-    st.write(f"VERIDIA EXTERNAL DEVELOPMENT ({', '.join(desired_columns)})")
-    st.write(f"Total records: {len(veridia_external)}")
-    st.write(veridia_external)
-    st.write(f"VERIDIA LIFT ({', '.join(desired_columns)})")
-    st.write(f"Total records: {len(veridia_lift)}")
-    st.write(veridia_lift)
-    st.write(f"VERIDIA COMMON AREA FINISHING ({', '.join(desired_columns)})")
-    st.write(f"Total records: {len(veridia_common_area)}")
-    st.write(veridia_common_area)
+    safe_log(f"VERIDIA FINISHING ({', '.join(desired_columns)})")
+    safe_log(f"Total records: {len(veridia_finishing)}")
+    safe_log(f"VERIDIA STRUCTURE ({', '.join(desired_columns)})")
+    safe_log(f"Total records: {len(veridia_structure)}")
+    safe_log(f"VERIDIA EXTERNAL DEVELOPMENT ({', '.join(desired_columns)})")
+    safe_log(f"Total records: {len(veridia_external)}")
+    safe_log(f"VERIDIA LIFT ({', '.join(desired_columns)})")
+    safe_log(f"Total records: {len(veridia_lift)}")
+    safe_log(f"VERIDIA COMMON AREA FINISHING ({', '.join(desired_columns)})")
+    safe_log(f"Total records: {len(veridia_common_area)}")
 
+    update_progress(100, "Data fetching completed!")
     return veridia_finishing, veridia_structure, veridia_external, veridia_lift, veridia_common_area
 
 
 # Fetch Activity Data with Async
-@function_timer()
 async def Get_Activity():
     record_limit = 1000
     headers = {
@@ -654,7 +893,6 @@ async def Get_Activity():
     return finishing_activity_data, structure_activity_data, external_activity_data, lift_activity_data, common_area_activity_data
 
 # Fetch Location/Module Data with Async
-@function_timer()
 async def Get_Location():
     record_limit = 1000
     headers = {
@@ -903,7 +1141,6 @@ async def Get_Location():
 
 
 # Process individual chunk
-@function_timer()
 def process_chunk(chunk, chunk_idx, dataset_name, location_df):
     logger.info(f"Starting thread for {dataset_name} Chunk {chunk_idx + 1}")
     generated_text = format_chunk_locally(chunk, chunk_idx, len(chunk), dataset_name, location_df)
@@ -911,7 +1148,6 @@ def process_chunk(chunk, chunk_idx, dataset_name, location_df):
     return generated_text, chunk_idx
 
 # Process data with manual counting
-@function_timer()
 def process_manually(analysis_df, total, dataset_name, chunk_size=1000, max_workers=4):
     if analysis_df.empty:
         st.warning(f"No completed activities found for {dataset_name}.")
@@ -1034,7 +1270,6 @@ def process_manually(analysis_df, total, dataset_name, chunk_size=1000, max_work
     return {"towers": aggregated_data, "total": total}
 
 # Local formatting function for manual counting
-@function_timer()
 def format_chunk_locally(chunk, chunk_idx, chunk_size, dataset_name, location_df):
     towers_data = {}
     
@@ -1070,7 +1305,6 @@ def format_chunk_locally(chunk, chunk_idx, chunk_size, dataset_name, location_df
     return output
 
 
-@function_timer()
 def process_data(df, activity_df, location_df, dataset_name, use_module_hierarchy_for_finishing=False):
     # Filter completed activities
     completed = df[df['statusName'] == 'Completed'].copy()
@@ -1327,15 +1561,37 @@ def process_data(df, activity_df, location_df, dataset_name, use_module_hierarch
 
 
 # Main analysis function
-
-@function_timer()
 def AnalyzeStatusManually(email=None, password=None):
     start_time = time.time()
+    import logging
+    import pandas as pd
+    import streamlit as st
+    import json
+    import traceback
+
+    logger = logging.getLogger(__name__)
 
     if 'sessionid' not in st.session_state:
         st.error("❌ Please log in first!")
         return
 
+    # Validate COS data
+    st.write("### Validating COS Data...")
+    for tower, data_key, name_key in [
+        ('Tower 5', 'cos_df_tower5', 'cos_tname_tower5'),
+        ('Tower 7', 'cos_df_tower7', 'cos_tname_tower7'),
+        ('Tower 4(A)', 'cos_df_tower4a', 'cos_tname_tower4a'),
+        ('Tower 4(B)', 'cos_df_tower4b', 'cos_tname_tower4b')
+    ]:
+        data = st.session_state.get(data_key)
+        if data is None or not isinstance(data, pd.DataFrame) or data.empty:
+            st.session_state[data_key] = pd.DataFrame()
+            st.session_state[name_key] = tower
+        else:
+            st.write(f"{tower} data: {len(data)} rows")
+            logger.info(f"{tower} data: {len(data)} rows")
+
+    # Check required Asite data
     required_data = [
         'veridiafinishing', 'veridiastructure', 'veridiaexternal',
         'veridialift', 'veridiacommonarea',
@@ -1346,8 +1602,9 @@ def AnalyzeStatusManually(email=None, password=None):
     ]
     
     for data_key in required_data:
-        if data_key not in st.session_state:
-            st.error(f"❌ Please fetch required data first! Missing: {data_key}")
+        if data_key not in st.session_state or st.session_state[data_key] is None:
+            st.error(f"❌ Missing or None data: {data_key}")
+            logger.error(f"Missing or None data: {data_key}")
             return
 
     try:
@@ -1371,263 +1628,355 @@ def AnalyzeStatusManually(email=None, password=None):
     except KeyError as e:
         st.error(f"❌ Missing session state data: {str(e)}")
         return
-    except Exception as e:
-        st.error(f"❌ Error retrieving session state data: {str(e)}")
-        return
 
-    main_datasets = [
-        (finishing_data, "Finishing"),
-        (structure_data, "Structure"),
-        (external_data, "External Development"),
-        (lift_data, "Lift"),
-        (common_area_data, "Common Area Finishing")
-    ]
-
-    for df, name in main_datasets:
-        if not isinstance(df, pd.DataFrame):
-            st.error(f"❌ {name} data is not a DataFrame! Type: {type(df)}")
-            st.write(f"Content preview: {str(df)[:200]}...")
-            return
-            
-        required_columns = ['statusName', 'qiLocationId', 'activitySeq']
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            st.error(f"❌ Missing columns in {name} data: {missing_columns}")
-            st.write(f"Available columns: {list(df.columns)}")
-            return
-    
-    location_datasets = [
-        (finishing_locations, "Finishing Location"),
-        (structure_locations, "Structure Location"),
-        (external_locations, "External Development Location"),
-        (lift_locations, "Lift Location"),
-        (common_area_locations, "Common Area Finishing Location")
-    ]
-
-    for df, name in location_datasets:
-        if not isinstance(df, pd.DataFrame):
-            st.error(f"❌ {name} data is not a DataFrame! Type: {type(df)}")
-            return
-            
-        required_columns = ['qiLocationId', 'name']
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            st.error(f"❌ Missing columns in {name} data: {missing_columns}")
-            st.write(f"Available columns: {list(df.columns)}")
-            return
-
-    activity_datasets = [
-        (finishing_activity, "Finishing Activity"),
-        (structure_activity, "Structure Activity"),
-        (external_activity, "External Development Activity"),
-        (lift_activity, "Lift Activity"),
-        (common_area_activity, "Common Area Finishing Activity")
-    ]
-
-    for df, name in activity_datasets:
-        if not isinstance(df, pd.DataFrame):
-            st.error(f"❌ {name} data is not a DataFrame! Type: {type(df)}")
-            return
-            
-        required_columns = ['activitySeq', 'activityName']
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            st.error(f"❌ Missing columns in {name} data: {missing_columns}")
-            st.write(f"Available columns: {list(df.columns)}")
-            return
-
-    def normalize_activity_name(name):
-        if not isinstance(name, str):
-            return name
-        typo_corrections = {
-            "Wall Conduting": "Wall Conducting",
-            "Slab conduting": "Slab Conducting",
-        }
-        for typo, correct in typo_corrections.items():
-            if name.lower() == typo.lower():
-                return correct
-        return name
-
-    for df in [finishing_activity, structure_activity, external_activity, lift_activity, common_area_activity]:
-        df['activityName'] = df['activityName'].apply(normalize_activity_name)
-
-    # Fetch and store COS slab cycle data
-    st.write("Fetching COS slab cycle data...")
-
-    # Check if required session state keys exist
-    if not all(key in st.session_state for key in ['cos_client', 'bucket_name']):
-        st.error("COS client not initialized. Please run 'Initialize and Fetch Data' first.")
-        st.session_state['slab_df'] = pd.DataFrame()
-    else:
-        try:
-            # Get the COS client and bucket from session state
-            cos_client = st.session_state['cos_client']
-            bucket_name = st.session_state['bucket_name']
-            
-            # Initialize file_list if it doesn't exist or is None
-            if 'file_list' not in st.session_state or st.session_state['file_list'] is None:
-                st.write("File list not found in session state. Fetching files from COS...")
-                try:
-                    response = cos_client.list_objects_v2(Bucket=bucket_name, Prefix="Veridia/")
-                    if 'Contents' in response:
-                        st.session_state['file_list'] = [{'Key': obj['Key']} for obj in response['Contents']]
-                    else:
-                        st.session_state['file_list'] = []
-                        st.warning("No files found in Veridia folder.")
-                except Exception as e:
-                    st.session_state['file_list'] = []
-            
-            file_list = st.session_state['file_list']
-            
-            # Ensure file_list is a list before proceeding
-            if not isinstance(file_list, list):
-                st.error(f"file_list is not a list. Type: {type(file_list)}")
-                st.session_state['slab_df'] = pd.DataFrame()
-            else:
-                # Call GetSlabReport function if it exists
-                try:
-                    GetSlabReport()  # Make sure this function is defined and works properly
-                    #
-                except NameError:
-                    st.warning("GetSlabReport function not found. Skipping slab report generation.")
-                except Exception as e:
-                    st.warning(f"Error calling GetSlabReport: {str(e)}")
-                
-                # Find slab cycle files
-                struct_files = [file for file in file_list if isinstance(file, dict) and 'Key' in file and 'Anti. Slab Cycle' in file['Key']]
-            
-        except Exception as e:
-            st.error(f"❌ Error fetching COS slab cycle data: {str(e)}")
-            logging.error(f"Error fetching COS slab cycle data: {str(e)}")
-            st.session_state['slab_df'] = pd.DataFrame()
-
-    asite_data = []
-    outputs = {}
-    for dataset_name, data, activity, location in [
-        ("Finishing", finishing_data, finishing_activity, finishing_locations),
-        ("Structure", structure_data, structure_activity, structure_locations),
-        ("External Development", external_data, external_activity, external_locations),
-        ("Lift", lift_data, lift_activity, lift_locations),
-        ("Common Area Finishing", common_area_data, common_area_activity, common_area_locations)
-    ]:
-        try:
-            analysis, total, count_table = process_data(data, activity, location, dataset_name)
-            if analysis.empty and total == 0:
-                logger.warning(f"No valid data processed for {dataset_name}. Skipping analysis.")
-                st.warning(f"No completed activities found for {dataset_name}.")
-                outputs[dataset_name] = {"towers": {}, "total": 0}
-                continue
-            output = process_manually(analysis, total, dataset_name)
-            outputs[dataset_name] = output
-            for tower, activities in output["towers"].items():
-                for activity_name, count in activities.items():
-                    normalized_name = normalize_activity_name(activity_name)
-                    asite_data.append({
-                        "Dataset": dataset_name,
-                        "Tower": tower,
-                        "Activity Name": normalized_name,
-                        "Count": count
-                    })
-        except Exception as e:
-            logger.error(f"Error processing {dataset_name} data: {str(e)}")
-            st.error(f"❌ Error processing {dataset_name} data: {str(e)}")
-            outputs[dataset_name] = {"towers": {}, "total": 0}
-            continue
-
-    asite_df = pd.DataFrame(asite_data)
-
-    for dataset_name in ["Finishing", "Structure", "External Development", "Lift", "Common Area Finishing"]:
-        output = outputs.get(dataset_name, {"towers": {}, "total": 0})
-        st.write(f"### Veridia {dataset_name} Quality Analysis (Completed Activities):")
-        if not output["towers"]:
-            st.write("No completed activities found.")
-            continue
-        for tower, activities in output["towers"].items():
-            st.write(f"{tower} activityName            CompletedCount")
-            for name, count in sorted(activities.items()):
-                st.write(f"{'':<11} {name:<23} {count:>14}")
-            st.write(f"{'':<11} Total for {tower:<11}: {sum(activities.values()):>14}")
-        st.write(f"Total Completed Activities: {output['total']}")
-
+    # Process COS data - FIXED SECTION
+    st.write("### Processing COS Data...")
     cos_data = []
     first_fix_counts = {}
-
+    
+    # Fixed tower name mapping
+    tower_name_mapping = {
+        'cos_tname_tower4a': 'Tower 4(A)',
+        'cos_tname_tower4b': 'Tower 4(B)',
+        'cos_tname_tower5': 'Tower 5',
+        'cos_tname_tower7': 'Tower 7'
+    }
+    
     cos_datasets = [
         ('cos_tname_tower4a', 'cos_df_tower4a'),
         ('cos_tname_tower4b', 'cos_df_tower4b'),
-        ('cos_tname_tower5', 'cos_df_tower5')
+        ('cos_tname_tower5', 'cos_df_tower5'),
+        ('cos_tname_tower7', 'cos_df_tower7')
+    ]
+
+    # Initialize tower names and data if missing - FIXED
+    for tname_key, tdata_key in cos_datasets:
+        # Force set the tower name from mapping, don't rely on session state
+        st.session_state[tname_key] = tower_name_mapping.get(tname_key, f"Tower {tname_key.replace('cos_tname_', '').upper()}")
+        if tdata_key not in st.session_state:
+            st.session_state[tdata_key] = pd.DataFrame()
+
+    # Debug: Print session state info
+    st.write("### Debug: COS Session State Analysis")
+    for tname_key, tdata_key in cos_datasets:
+        tower_name = st.session_state.get(tname_key, "NOT_FOUND")
+        data = st.session_state.get(tdata_key, "NOT_FOUND")
+        st.write(f"Tower: {tower_name} | Data rows: {len(data) if isinstance(data, pd.DataFrame) else 'N/A'}")
+
+    activities_list = [
+        "EL-First Fix", "UP-First Fix", "CP-First Fix", "C-Gypsum and POP Punning",
+        "EL-Second Fix", "No. of Slab cast", "Electrical", "Installation of doors",
+        "Waterproofing Works", "Wall Tiling", "Floor Tiling", "Sewer Line",
+        "Storm Line", "GSB", "WMM", "Stamp Concrete", "Saucer drain", "Kerb Stone"
     ]
 
     for tname_key, tdata_key in cos_datasets:
-        if tname_key in st.session_state and tdata_key in st.session_state:
-            tname = st.session_state[tname_key]
-            tower_data = st.session_state[tdata_key]
+        # FIXED: Always use the mapping, never rely on potentially None session state values
+        tname = tower_name_mapping.get(tname_key, f"Tower {tname_key.replace('cos_tname_', '').upper()}")
+        tower_data = st.session_state[tdata_key]
+        
+        # Initialize first fix counts for this tower
+        first_fix_counts[tname] = {}
+        
+        st.write(f"Processing {tname} (key: {tname_key})")
+        
+        if tower_data is not None and isinstance(tower_data, pd.DataFrame) and not tower_data.empty:
+            tower_data = tower_data.copy()
             
-            if tower_data is not None and isinstance(tower_data, pd.DataFrame):
-                tower_data = tower_data.copy()
+            # Check if required columns exist
+            required_columns = ['Actual Finish', 'Activity Name']
+            missing_columns = [col for col in required_columns if col not in tower_data.columns]
+            
+            if missing_columns:
+                st.warning(f"Missing columns in {tname}: {missing_columns}")
+                st.write(f"Available columns: {list(tower_data.columns)}")
+                # Use fallback processing if columns are missing
+                for activity in activities_list:
+                    cos_data.append({
+                        "Tower": tname,
+                        "Activity Name": activity,
+                        "Count": 0
+                    })
+                    if activity in ["UP-First Fix", "CP-First Fix"]:
+                        first_fix_counts[tname][activity] = 0
+            else:
+                # Normal processing with proper columns
                 tower_data['Actual Finish'] = pd.to_datetime(tower_data['Actual Finish'], errors='coerce')
                 tower_data_filtered = tower_data[~pd.isna(tower_data['Actual Finish'])].copy()
                 
-                first_fix_counts[tname] = {}
+                logger.info(f"Processing {tname}: {len(tower_data_filtered)} rows with actual finish dates")
+                st.write(f"Processing {tname}: {len(tower_data_filtered)} rows with actual finish dates")
                 
-                for activity in [
-                    "EL-First Fix", "UP-First Fix", "CP-First Fix", "C-Gypsum and POP Punning",
-                    "EL-Second Fix", "No. of Slab cast", "Electrical", "Installation of doors",
-                    "Waterproofing Works", "Wall Tiling", "Floor Tiling", "Sewer Line",
-                    "Storm Line", "GSB", "WMM", "Stamp Concrete", "Saucer drain", "Kerb Stone"
-                ]:
+                for activity in activities_list:
                     count = len(tower_data_filtered[tower_data_filtered['Activity Name'] == activity])
                     cos_data.append({
                         "Tower": tname,
                         "Activity Name": activity,
                         "Count": count
                     })
+                    logger.info(f"{tname} - {activity}: {count} counts")
                     
-                    if activity == "UP-First Fix" or activity == "CP-First Fix":
+                    if activity in ["UP-First Fix", "CP-First Fix"]:
                         first_fix_counts[tname][activity] = count
+        else:
+            # Handle empty or missing data
+            st.write(f"No data available for {tname}, setting all counts to 0")
+            for activity in activities_list:
+                cos_data.append({
+                    "Tower": tname,
+                    "Activity Name": activity,
+                    "Count": 0
+                })
+                if activity in ["UP-First Fix", "CP-First Fix"]:
+                    first_fix_counts[tname][activity] = 0
 
+    # Add minimum count calculations
     for tname in first_fix_counts:
         up_count = first_fix_counts[tname].get("UP-First Fix", 0)
         cp_count = first_fix_counts[tname].get("CP-First Fix", 0)
-        combined_count = up_count + cp_count
+        combined_count = min(up_count, cp_count)
         cos_data.append({
             "Tower": tname,
             "Activity Name": "Min. count of UP-First Fix and CP-First Fix",
             "Count": combined_count
         })
+        logger.info(f"{tname} - Min. count of UP-First Fix and CP-First Fix: {combined_count}")
+
+    # Debug: Print tower names being used
+    st.write("### Debug: Tower Names Used")
+    unique_towers = list(set([item["Tower"] for item in cos_data]))
+    st.write(f"Unique tower names in COS data: {unique_towers}")
 
     cos_df = pd.DataFrame(cos_data)
-    
-    logger.info(f"Asite DataFrame:\n{asite_df.to_string()}")
     logger.info(f"COS DataFrame:\n{cos_df.to_string()}")
-    st.write("### Asite DataFrame (Debug):")
-    st.write(asite_df)
     st.write("### COS DataFrame (Debug):")
     st.write(cos_df)
 
+    # Process Asite data
+    st.write("### Processing Asite Data...")
+    datasets = [
+        ("Finishing", finishing_data, finishing_activity, finishing_locations),
+        ("Structure", structure_data, structure_activity, structure_locations),
+        ("External Development", external_data, external_activity, external_locations),
+        ("Lift", lift_data, lift_activity, lift_locations),
+        ("Common Area Finishing", common_area_data, common_area_activity, common_area_locations)
+    ]
+    
+    asite_data = []
+    
+    # Display raw data for debugging
+    st.write("### Raw Asite Data (Debug):")
+    for dataset_name, df, activity_df, location_df in datasets:
+        if df is not None and not df.empty:
+            st.write(f"{dataset_name}: {len(df)} records")
+            st.write(f"Columns: {list(df.columns)}")
+            st.write(df.head(2))
+        if activity_df is not None and not activity_df.empty:
+            st.write(f"{dataset_name} Activity: {len(activity_df)} records")
+            st.write(f"Activity Columns: {list(activity_df.columns)}")
+            st.write(activity_df.head(2))
+        if location_df is not None and not location_df.empty:
+            st.write(f"{dataset_name} Location: {len(location_df)} records")
+            st.write(f"Location Columns: {list(location_df.columns)}")
+            st.write(location_df.head(2))
+    
+    for dataset_name, df, activity_df, location_df in datasets:
+        st.write(f"Debug: Processing {dataset_name}...")
+        st.write(f"  - DataFrame: {len(df) if df is not None else 'None'} records")
+        st.write(f"  - Activity DataFrame: {len(activity_df) if activity_df is not None else 'None'} records")
+        st.write(f"  - Location DataFrame: {len(location_df) if location_df is not None else 'None'} records")
+        
+        if df is None or df.empty or activity_df is None or activity_df.empty or location_df is None or location_df.empty:
+            st.warning(f"Skipping {dataset_name} - missing or empty data")
+            logger.warning(f"Skipping {dataset_name} - DataFrame empty: {df is None or df.empty}, Activity empty: {activity_df is None or activity_df.empty}, Location empty: {location_df is None or location_df.empty}")
+            continue
+        
+        # Check for activity identifier columns
+        possible_activity_cols = ['activitySeq', 'activityId', 'seq', 'activity_seq', 'id', 'ActivityID', 'ActivityId', 'taskId', 'activity_id', 'activity_code', 'task_code', 'work_id']
+        activity_col = None
+        for col in possible_activity_cols:
+            if col in df.columns:
+                activity_col = col
+                break
+        
+        # Check for activity name columns
+        possible_name_cols = ['activityName', 'ActivityName', 'activity_name', 'Activity_Name', 'name', 'description', 'taskName', 'task_desc', 'work_name', 'activity_desc']
+        activity_name_col = None
+        for col in possible_name_cols:
+            if col in df.columns:
+                activity_name_col = col
+                break
+        
+        if activity_col is None and activity_name_col is None:
+            st.error(f"No activity identifier or name column found in {dataset_name} data. Tried identifiers: {possible_activity_cols}, names: {possible_name_cols}")
+            logger.error(f"No activity identifier or name column found in {dataset_name} data. Columns: {list(df.columns)}")
+            st.warning(f"Processing {dataset_name} with location-based counts as fallback. Please check Asite API schema in initialize_and_fetch_data.")
+            # Fallback: Count completed locations by tower
+            if 'statusName' in df.columns and 'qiLocationId' in df.columns:
+                completed = df[df['statusName'] == 'Completed'].copy()
+                if not completed.empty:
+                    tower_counts = completed.groupby('qiLocationId')['statusName'].count().reset_index(name='Count')
+                    for _, row in tower_counts.iterrows():
+                        # You need to implement get_tower_name function or use a mapping
+                        tower_name = f"Location {row['qiLocationId']}"  # Placeholder
+                        asite_data.append({
+                            "Tower": tower_name,
+                            "Activity Name": f"Completed Location {row['qiLocationId']}",
+                            "Count": row['Count'],
+                            "Dataset": dataset_name
+                        })
+                    st.write(f"Fallback processed {dataset_name}: {len(tower_counts)} locations")
+                else:
+                    st.warning(f"No completed activities found for {dataset_name} fallback")
+            continue
+        else:
+            if activity_col and activity_col != 'activitySeq':
+                st.warning(f"Renaming {activity_col} to activitySeq in {dataset_name} data")
+                df = df.rename(columns={activity_col: 'activitySeq'})
+            if activity_name_col and activity_name_col != 'activityName':
+                st.warning(f"Renaming {activity_name_col} to activityName in {dataset_name} data")
+                df = df.rename(columns={activity_name_col: 'activityName'})
+            
+            # Fallback: Use activityName if activitySeq is missing
+            if activity_col is None and activity_name_col:
+                st.warning(f"Using activityName directly for {dataset_name} without activity merge")
+                df['activitySeq'] = df['activityName']
+                activity_df = pd.DataFrame({
+                    'activitySeq': df['activityName'].unique(),
+                    'activityName': df['activityName'].unique()
+                })
+        
+        # Validate required columns
+        required_cols = ['statusName', 'qiLocationId']
+        if activity_col:
+            required_cols.append('activitySeq')
+        if activity_name_col:
+            required_cols.append('activityName')
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            st.error(f"Missing columns in {dataset_name} data: {missing_cols}")
+            logger.error(f"Missing columns in {dataset_name} data: {missing_cols}")
+            continue
+        
+        required_activity_cols = ['activitySeq', 'activityName']
+        missing_activity_cols = [col for col in required_activity_cols if col not in activity_df.columns]
+        if missing_activity_cols:
+            st.error(f"Missing columns in {dataset_name} activity data: {missing_activity_cols}")
+            logger.error(f"Missing columns in {dataset_name} activity data: {missing_activity_cols}")
+            continue
+        
+        required_location_cols = ['qiLocationId', 'name']
+        missing_location_cols = [col for col in required_location_cols if col not in location_df.columns]
+        if missing_location_cols:
+            st.error(f"Missing columns in {dataset_name} location data: {missing_location_cols}")
+            logger.error(f"Missing columns in {dataset_name} location data: {missing_location_cols}")
+            continue
+        
+        st.write(f"  - DataFrame columns: {list(df.columns)}")
+        st.write(f"  - Activity DataFrame columns: {list(activity_df.columns)}")
+        st.write(f"  - Location DataFrame columns: {list(location_df.columns)}")
+        
+        try:
+            # Note: You need to implement these functions: process_data and process_manually
+            analysis_df, total_completed, count_table = process_data(df, activity_df, location_df, dataset_name)
+            
+            st.write(f"Debug: {dataset_name} analysis results:")
+            st.write(f"  - Analysis DataFrame: {len(analysis_df)} records")
+            st.write(f"  - Total completed: {total_completed}")
+            if not analysis_df.empty:
+                st.write(f"  - Analysis columns: {list(analysis_df.columns)}")
+                st.write(f"  - Sample data: {analysis_df.head().to_dict()}")
+            
+            if not analysis_df.empty:
+                processed_data = process_manually(analysis_df, total_completed, dataset_name)
+                
+                st.write(f"Debug: {dataset_name} processed data:")
+                st.write(f"  - Towers: {list(processed_data['towers'].keys())}")
+                st.write(f"  - Total activities: {sum(len(activities) for activities in processed_data['towers'].values())}")
+                
+                for tower_name, activities in processed_data['towers'].items():
+                    for activity_name, count in activities.items():
+                        asite_data.append({
+                            "Tower": tower_name,
+                            "Activity Name": activity_name,
+                            "Count": count,
+                            "Dataset": dataset_name
+                        })
+                
+                st.write(f"Processed {dataset_name}: {len(processed_data['towers'])} towers, {sum(len(activities) for activities in processed_data['towers'].values())} activities")
+            else:
+                st.warning(f"No completed activities found for {dataset_name}")
+                logger.warning(f"No completed activities found for {dataset_name}")
+        except Exception as e:
+            st.error(f"Error processing {dataset_name}: {str(e)}")
+            logger.error(f"Error processing {dataset_name}: {str(e)}", exc_info=True)
+            st.error(f"Full traceback: {traceback.format_exc()}")
+
+    asite_df = pd.DataFrame(asite_data)
+    logger.info(f"Asite DataFrame:\n{asite_df.to_string()}")
+    st.write("### Asite DataFrame (Debug):")
+    st.write(asite_df)
+
+    # Combine data for AI processing
     combined_data = {
         "COS": cos_df,
         "Asite": asite_df
     }
-
-    with st.spinner("Categorizing activities with WatsonX..."):
-        ai_response = generatePrompt(combined_data, st.session_state.slabreport)
-        st.session_state.ai_response = ai_response
-
-    st.write("### Categorized Activity Counts (COS and Asite):")
+    
+    # Get slab data
     try:
-        ai_data = json.loads(ai_response)
-        st.json(ai_data)
-    except json.JSONDecodeError as e:
-        st.error(f"Failed to parse AI response as JSON: {str(e)}")
-        st.write("Raw AI response:")
-        st.text(ai_response)
+        GetSlabReport()  # Note: You need to implement this function
+    except Exception as e:
+        st.warning(f"Error fetching slab report: {str(e)}")
+        logger.warning(f"Error fetching slab report: {str(e)}")
+    
+    slab_data = st.session_state.get('slabreport', pd.DataFrame())
+    
+    if isinstance(slab_data, dict) and 'COS' in slab_data and 'Asite' in slab_data:
+        st.warning("Slab data appears to be combined data structure, using empty slab data")
+        slab_data = pd.DataFrame()
+        logger.warning("Slab data appears to be combined data structure, using empty slab data")
+    
+    logger.info(f"Slab data for AI generation: {slab_data}")
+    
+    # Generate AI response
+    st.write("### Generating AI Analysis...")
+    try:
+        ai_response = generatePrompt(combined_data, slab_data)  # Note: You need to implement this function
+        if ai_response and ai_response != combined_data:
+            # Ensure ai_response is stored as a JSON string
+            if isinstance(ai_response, dict):
+                st.session_state.ai_response = json.dumps(ai_response)
+            else:
+                st.session_state.ai_response = ai_response
+            st.success("AI analysis generated successfully!")
+            logger.info("AI analysis completed successfully")
+        else:
+            st.warning("AI generation failed, using fallback data")
+            # Create fallback structure
+            fallback_data = {
+                "COS": cos_df.to_dict('records') if not cos_df.empty else [],
+                "Asite": asite_df.to_dict('records') if not asite_df.empty else [],
+                "Slab": {}
+            }
+            st.session_state.ai_response = json.dumps(fallback_data)
+    except Exception as e:
+        st.error(f"Error generating AI analysis: {str(e)}")
+        logger.error(f"Error generating AI analysis: {str(e)}")
+        # Create fallback structure
+        fallback_data = {
+            "COS": cos_df.to_dict('records') if not cos_df.empty else [],
+            "Asite": asite_df.to_dict('records') if not asite_df.empty else [],
+            "Slab": {}
+        }
+        st.session_state.ai_response = json.dumps(fallback_data)
 
     end_time = time.time()
     st.write(f"Total execution time: {end_time - start_time:.2f} seconds")
+
+
     
 # COS File Fetching Function
-@function_timer()
 def get_cos_files():
     try:
         cos_client = initialize_cos_client()
@@ -1652,7 +2001,7 @@ def get_cos_files():
 
         # Pattern for Finishing Tracker files
         finishing_pattern = re.compile(
-            r"Veridia/Tower\s*([4|5])\s*Finishing\s*Tracker[\(\s]*(.*?)(?:[\)\s]*\.xlsx)$",
+            r"Veridia/Tower\s*([4|5|7])\s*Finishing\s*Tracker[\(\s]*(.*?)(?:[\)\s]*\.xlsx)$",
             re.IGNORECASE
         )
         # Pattern for Anti. Slab Cycle file
@@ -1750,6 +2099,9 @@ if 'cos_tname_tower4b' not in st.session_state:
     st.session_state.cos_tname_tower4b = None
 if 'cos_tname_tower5' not in st.session_state:
     st.session_state.cos_tname_tower5 = None
+if 'cos_tname_tower7' not in st.session_state:
+    st.session_state.cos_tname_tower5 = None
+
 
 # ADD THESE MISSING INITIALIZATIONS:
 if 'cos_client' not in st.session_state:
@@ -1772,7 +2124,7 @@ if 'ignore_year' not in st.session_state:
 
 
 # Process Excel files
-@function_timer()
+
 def process_file(file_stream, filename):
     try:
         workbook = openpyxl.load_workbook(file_stream)
@@ -1891,6 +2243,8 @@ def process_file(file_stream, filename):
                 tower_num = "5"
             elif "Tower 4" in filename or "Tower4" in filename:
                 tower_num = "4"
+            elif "Tower 7" in filename or "Tower7" in filename:
+                tower_num = "7"
 
             if not tower_num:
                 st.error(f"Cannot determine tower number from filename: {filename}")
@@ -2013,7 +2367,6 @@ def process_file(file_stream, filename):
     
     
 #Slab code
-@function_timer()
 def GetSlabReport():
     foundverdia = False
     today = date.today()
@@ -2079,8 +2432,6 @@ def GetSlabReport():
         files = ["Error fetching COS files"]
         st.session_state.slabreport = "No Data Found"
 
-
-@function_timer()
 def generatePrompt(combined_data, slab):
     try:
         st.write(slab)
@@ -2205,7 +2556,8 @@ def generatePrompt(combined_data, slab):
                   ]
                 }},
                 {{ "Tower": "Tower 4(B)", "Categories": [...] }},
-                {{ "Tower": "Tower 5", "Categories": [...] }}
+                {{ "Tower": "Tower 5", "Categories": [...] }},
+                {{ "Tower": "Tower 7", "Categories": [...] }}
               ],
               "Slab":{{
                  "Tower Name":"Total"
@@ -2293,7 +2645,8 @@ def generatePrompt(combined_data, slab):
         return (combined_data)
 
 
-@function_timer()
+
+
 def extract_and_repair_json(text):
     # Try to find JSON content within the response
     json_match = re.search(r'\{.*\}', text, re.DOTALL)
@@ -2356,7 +2709,6 @@ def extract_and_repair_json(text):
         return None
 
 # Fix the getTotal function to handle the improved JSON structure
-@function_timer()
 def getTotal(ai_data):
     try:
         if isinstance(ai_data, str):
@@ -2414,7 +2766,6 @@ def getTotal(ai_data):
 
    
 # Function to handle activity count display logic
-@function_timer()
 def display_activity_count():
     try:
         if 'ai_response' not in st.session_state or not st.session_state.ai_response:
@@ -2588,242 +2939,33 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+# Show progress if data fetching is in progress
+show_progress()
 
+st.sidebar.title("🔒Asite Initialization")
+email = st.sidebar.text_input("Email", "impwatson@gadieltechnologies.com", key="email_input")
+password = st.sidebar.text_input("Password", "Srihari@790$", type="password", key="password_input")
 
-# Combined function for Initialize All Data and Fetch COS
-@function_timer()
-async def initialize_and_fetch_data(email, password):
-    with st.spinner("Starting initialization and data fetching process..."):
-        # Step 1: Login
-        if not email or not password:
-            st.sidebar.error("Please provide both email and password!")
-            return False
+if st.sidebar.button("Initialize and Fetch Data"):
+    # Check if data is already fetched
+    if st.session_state.get('data_fetch_complete', False):
+        st.sidebar.info("Data already fetched! Click 'Analyze and Display Activity Counts' to proceed.")
+    else:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            st.sidebar.write("Logging in...")
-            session_id = await login_to_asite(email, password)
-            if not session_id:
-                st.sidebar.error("Login failed!")
-                return False
-            st.sidebar.success("Login successful!")
-        except Exception as e:
-            st.sidebar.error(f"Login failed: {str(e)}")
-            return False
-
-        # Step 2: Get Workspace ID
-        try:
-            st.sidebar.write("Fetching Workspace ID...")
-            await GetWorkspaceID()
-            st.sidebar.success("Workspace ID fetched successfully!")
-        except Exception as e:
-            st.sidebar.error(f"Failed to fetch Workspace ID: {str(e)}")
-            return False
-
-        # Step 3: Get Project IDs
-        try:
-            st.sidebar.write("Fetching Project IDs...")
-            await GetProjectId()
-            st.sidebar.success("Project IDs fetched successfully!")
-        except Exception as e:
-            st.sidebar.error(f"Failed to fetch Project IDs: {str(e)}")
-            return False
-
-        # Step 4: Get All Data
-        try:
-            st.sidebar.write("Fetching All Data...")
-            veridiafinishing, veridiastructure, veridiaexternal, veridialift, veridiacommonarea = await GetAllDatas()
-            st.session_state.veridiafinishing = veridiafinishing
-            st.session_state.veridiastructure = veridiastructure
-            st.session_state.veridiaexternal = veridiaexternal  
-            st.session_state.veridialift = veridialift
-            st.session_state.veridiacommonarea = veridiacommonarea
-            st.sidebar.success("All Data fetched successfully!")
-            logger.info(f"Stored veridiafinishing: {len(veridiafinishing)} records, veridiastructure: {len(veridiastructure)} records, veridiaexternal: {len(veridiaexternal)} records, veridialift: {len(veridialift)} records, veridia_common_area: {len(veridiacommonarea)} records")
-        except Exception as e:
-            st.sidebar.error(f"Failed to fetch All Data: {str(e)}")
-            logger.error(f"Failed to fetch All Data: {str(e)}")
-            return False
-
-       
-        # Step 5: Get Activity Data
-        try:
-            st.sidebar.write("Fetching Activity Data...")
-            finishing_activity_data, structure_activity_data, external_activity_data, lift_activity_data, common_area_activity_data = await Get_Activity()
-            # Validate DataFrames
-            activity_dataframes = {
-                "finishing_activity_data": finishing_activity_data,
-                "structure_activity_data": structure_activity_data,
-                "external_activity_data": external_activity_data,
-                "lift_activity_data": lift_activity_data,
-                "common_area_activity_data": common_area_activity_data
-            }
-            for name, df in activity_dataframes.items():
-                if df is None:
-                    logger.error(f"{name} is None")
-                    raise ValueError(f"{name} is None")
-                if not isinstance(df, pd.DataFrame):
-                    logger.error(f"{name} is not a DataFrame: {type(df)}")
-                    raise ValueError(f"{name} is not a valid DataFrame")
-                logger.info(f"{name} has {len(df)} records, empty: {df.empty}")
-                if df.empty:
-                    logger.warning(f"{name} is empty")
-            # Store in session state
-            st.session_state.finishing_activity_data = finishing_activity_data
-            st.session_state.structure_activity_data = structure_activity_data
-            st.session_state.external_activity_data = external_activity_data
-            st.session_state.lift_activity_data = lift_activity_data
-            st.session_state.common_area_activity_data = common_area_activity_data
-            st.sidebar.success("Activity Data fetched successfully!")
-            logger.info(f"Stored activity data - Finishing: {len(finishing_activity_data)} records, "
-                        f"Structure: {len(structure_activity_data)} records, "
-                        f"External: {len(external_activity_data)} records, "
-                        f"Lift: {len(lift_activity_data)} records, "
-                        f"Common Area: {len(common_area_activity_data)} records")
-        except Exception as e:
-            st.sidebar.error(f"Failed to fetch Activity Data: {str(e)}")
-            logger.error(f"Failed to fetch Activity Data: {str(e)}\nStack trace:\n{traceback.format_exc()}")
-            return False
-
-        # Step 6: Get Location/Module Data
-        try:
-            st.sidebar.write("Fetching Location/Module Data...")
-            finishing_location_data, structure_location_data, external_location_data, lift_location_data, common_area_location_data = await Get_Location()
-            # Validate DataFrames
-            location_dataframes = {
-                "finishing_location_data": finishing_location_data,
-                "structure_location_data": structure_location_data,
-                "external_location_data": external_location_data,
-                "lift_location_data": lift_location_data,
-                "common_area_location_data": common_area_location_data
-            }
-            for name, df in location_dataframes.items():
-                if df is None:
-                    logger.error(f"{name} is None")
-                    raise ValueError(f"{name} is None")
-                if not isinstance(df, pd.DataFrame):
-                    logger.error(f"{name} is not a DataFrame: {type(df)}")
-                    raise ValueError(f"{name} is not a valid DataFrame")
-                logger.info(f"{name} has {len(df)} records, empty: {df.empty}")
-                if df.empty:
-                    logger.warning(f"{name} is empty")
-            # Store in session state
-            st.session_state.finishing_location_data = finishing_location_data
-            st.session_state.structure_location_data = structure_location_data
-            st.session_state.external_location_data = external_location_data
-            st.session_state.lift_location_data = lift_location_data
-            st.session_state.common_area_location_data = common_area_location_data
-            st.sidebar.success("Location/Module Data fetched successfully!")
-            logger.info(f"Stored location data - Finishing: {len(finishing_location_data)} records, "
-                        f"Structure: {len(structure_location_data)} records, "
-                        f"External: {len(external_location_data)} records, "
-                        f"Lift: {len(lift_location_data)} records, "
-                        f"Common Area: {len(common_area_location_data)} records")
-        except Exception as e:
-            st.sidebar.error(f"Failed to fetch Location/Module Data: {str(e)}")
-            logger.error(f"Failed to fetch Location/Module Data: {str(e)}\nStack trace:\n{traceback.format_exc()}")
-            return False
-        
-        # Step 7: Fetch COS Files
-        try:
-            st.sidebar.write("Fetching COS files from Veridia folder...")
-            files = get_cos_files()
-            st.session_state.files = files
-            if files:
-                st.success(f"Found {len(files)} files in COS storage")
-                for selected_file in files:
-                    try:
-                        st.write(f"Processing file: {selected_file}")
-                        cos_client = initialize_cos_client()
-                        if not cos_client:
-                            st.error("Failed to initialize COS client")
-                            continue
-                        response = cos_client.get_object(Bucket=COS_BUCKET, Key=selected_file)
-                        file_bytes = io.BytesIO(response['Body'].read())
-                        result = process_file(file_bytes, selected_file)
-                        if len(result) == 2:  # Handle Tower 4 split
-                            (df_first, tname_first), (df_second, tname_second) = result
-                            if df_first is not None and not df_first.empty:
-                                if "Tower 4(A)" in tname_first:
-                                    st.session_state.cos_df_tower4a = df_first
-                                    st.session_state.cos_tname_tower4a = tname_first
-                                    st.write(f"Processed Data for {tname_first} - {len(df_first)} rows:")
-                                    st.write(df_first.head())
-                                elif "Tower 4(B)" in tname_first:
-                                    st.session_state.cos_df_tower4b = df_first
-                                    st.session_state.cos_tname_tower4b = tname_first
-                                    st.write(f"Processed Data for {tname_first} - {len(df_first)} rows:")
-                                    st.write(df_first.head())
-                                elif "Tower 5" in tname_first:
-                                    st.session_state.cos_df_tower5 = df_first
-                                    st.session_state.cos_tname_tower5 = tname_first
-                                    st.write(f"Processed Data for {tname_first} - {len(df_first)} rows:")
-                                    st.write(df_first.head())
-                            if df_second is not None and not df_second.empty:
-                                if "Tower 4(A)" in tname_second:
-                                    st.session_state.cos_df_tower4a = df_second
-                                    st.session_state.cos_tname_tower4a = tname_second
-                                    st.write(f"Processed Data for {tname_second} - {len(df_second)} rows:")
-                                    st.write(df_second.head())
-                                elif "Tower 4(B)" in tname_second:
-                                    st.session_state.cos_df_tower4b = df_second
-                                    st.session_state.cos_tname_tower4b = tname_second
-                                    st.write(f"Processed Data for {tname_second} - {len(df_second)} rows:")
-                                    st.write(df_second.head())
-                        elif len(result) == 1:  # Handle Tower 5
-                            (df_first, tname_first) = result[0]
-                            if df_first is not None and not df_first.empty:
-                                if "Tower 4(A)" in tname_first:
-                                    st.session_state.cos_df_tower4a = df_first
-                                    st.session_state.cos_tname_tower4a = tname_first
-                                    st.write(f"Processed Data for {tname_first} - {len(df_first)} rows:")
-                                    st.write(df_first.head())
-                                elif "Tower 4(B)" in tname_first:
-                                    st.session_state.cos_df_tower4b = df_first
-                                    st.session_state.cos_tname_tower4b = tname_first
-                                    st.write(f"Processed Data for {tname_first} - {len(df_first)} rows:")
-                                    st.write(df_first.head())
-                                elif "Tower 5" in tname_first:
-                                    st.session_state.cos_df_tower5 = df_first
-                                    st.session_state.cos_tname_tower5 = tname_first
-                                    st.write(f"Processed Data for {tname_first} - {len(df_first)} rows:")
-                                    st.write(df_first.head())
-                            if "Tower 5" in selected_file:
-                                st.info(f"Processed Tower 5 data successfully.")
-                            else:
-                                st.warning(f"No secondary data (Tower 4 split) for {selected_file}.")
-                        else:
-                            st.warning(f"No data found in {selected_file}.")
-                    except Exception as e:
-                        st.error(f"Error loading {selected_file} from cloud storage: {str(e)}")
-                        logger.error(f"Error loading {selected_file}: {str(e)}")
+            success = loop.run_until_complete(initialize_and_fetch_data(email, password))
+            if success:
+                st.sidebar.success("Initialization and data fetching completed successfully!")
+                st.session_state.data_fetch_complete = True
             else:
-                st.warning("No expected Excel files available in the 'Veridia' folder of the COS bucket.")
+                st.sidebar.error("Initialization and data fetching failed!")
         except Exception as e:
-            st.sidebar.error(f"Failed to fetch COS files: {str(e)}")
-            logger.error(f"Failed to fetch COS files: {str(e)}")
-            return False
+            st.sidebar.error(f"Initialization and data fetching failed: {str(e)}")
+        finally:
+            loop.close()
 
-        # Step 8: Verify stored session state keys
-        st.sidebar.write("Verifying stored data...")
-        required_keys = [
-            'veridiafinishing', 'veridiastructure', 'veridiaexternal',
-            'finishing_activity_data', 'structure_activity_data', 'external_activity_data',
-            'finishing_location_data', 'structure_location_data', 'external_location_data'
-        ]
-        missing_keys = [key for key in required_keys if key not in st.session_state]
-        if missing_keys:
-            st.sidebar.error(f"Missing session state keys: {', '.join(missing_keys)}")
-            logger.error(f"Missing session state keys: {', '.join(missing_keys)}")
-            return False
-        else:
-            st.sidebar.success("All required data stored successfully!")
-            logger.info("All required session state keys verified.")
-
-        st.sidebar.write("Initialization and data fetching process completed!")
-        return True
-
-
-
-@function_timer()
+# Combined function to handle both analysis and activity count display
 def generate_consolidated_Checklist_excel(ai_data):
     try:
         # Parse AI data if it's a string
@@ -3192,16 +3334,18 @@ def generate_consolidated_Checklist_excel(ai_data):
                     worksheet1.cell(row=current_row, column=8).value = row["In Progress Work*(Count of Flat)"]
                     worksheet1.cell(row=current_row, column=9).value = row["Closed checklist against completed work"]
                     worksheet1.cell(row=current_row, column=10).value = row["Open/Missing check list"]
-                    for col in range(6, 10):
+                    for col in range(6, 11):
                         cell = worksheet1.cell(row=current_row, column=col)
                         cell.border = border
                         cell.alignment = center_alignment
                     current_row += 1
 
+            
+
                 total_open_missing = cat_group["Open/Missing check list"].sum()
-                worksheet1.cell(row=current_row, column=6).value = "TOTAL pending checklist June"
-                worksheet1.cell(row=current_row, column=9).value = total_open_missing
-                for col in range(6, 10):
+                worksheet1.cell(row=current_row, column=6).value = f"TOTAL pending checklist"
+                worksheet1.cell(row=current_row, column=10).value = total_open_missing
+                for col in range(6, 11):
                     cell = worksheet1.cell(row=current_row, column=col)
                     cell.font = category_font
                     cell.border = border
@@ -3325,29 +3469,14 @@ def generate_consolidated_Checklist_excel(ai_data):
         st.error(f"❌ Error generating Excel file: {str(e)}")
         return None
 
-# Streamlit UI - Modified Button Code
-st.sidebar.title("🔒Asite Initialization")
-email = st.sidebar.text_input("Email", "impwatson@gadieltechnologies.com", key="email_input")
-password = st.sidebar.text_input("Password", "Srihari@790$", type="password", key="password_input")
 
-if st.sidebar.button("Initialize and Fetch Data"):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        success = loop.run_until_complete(initialize_and_fetch_data(email, password))
-        if success:
-            st.sidebar.success("Initialization and data fetching completed successfully!")
-        else:
-            st.sidebar.error("Initialization and data fetching failed!")
-    except Exception as e:
-        st.sidebar.error(f"Initialization and data fetching failed: {str(e)}")
-    finally:
-        loop.close()
-
-# Combined function to handle both analysis and activity count display
-@function_timer(show_args=True)
 def run_analysis_and_display():
     try:
+        # Check if data is available
+        if not st.session_state.get('data_fetch_complete', False):
+            st.error("❌ Please run 'Initialize and Fetch Data' first!")
+            return
+            
         st.write("Running status analysis...")
         AnalyzeStatusManually()
         st.success("Status analysis completed successfully!")
@@ -3398,7 +3527,7 @@ def run_analysis_and_display():
 
     except Exception as e:
         st.error(f"Error during analysis, display, or Excel generation: {str(e)}")
-        logging.error(f"Error during analysis, display, or Excel generation: {str(e)}")
+        safe_log(f"Error during analysis, display, or Excel generation: {str(e)}", "error")
 
 st.sidebar.title("📊 Status Analysis")
 
@@ -3408,4 +3537,215 @@ if st.sidebar.button("Analyze and Display Activity Counts"):
 st.sidebar.title("📊 Slab Cycle")
 st.session_state.ignore_year = st.sidebar.number_input("Ignore Year", min_value=1900, max_value=2100, value=2023, step=1, key="ignore_year1")
 st.session_state.ignore_month = st.sidebar.number_input("Ignore Month", min_value=1, max_value=12, value=3, step=1, key="ignore_month1")
+
+# Combined function for Initialize All Data and Fetch COS
+async def initialize_and_fetch_data(email, password):
+    # Reset progress at start
+    update_progress(0, "Starting initialization...")
+    
+    with st.spinner("Starting initialization and data fetching process..."):
+        # Step 1: Login
+        if not email or not password:
+            st.sidebar.error("Please provide both email and password!")
+            return False
+        try:
+            update_progress(5, "Logging in...")
+            session_id = await login_to_asite(email, password)
+            if not session_id:
+                st.sidebar.error("Login failed!")
+                return False
+            st.sidebar.success("Login successful!")
+        except Exception as e:
+            st.sidebar.error(f"Login failed: {str(e)}")
+            return False
+
+        # Step 2: Get Workspace ID
+        try:
+            update_progress(10, "Fetching Workspace ID...")
+            await GetWorkspaceID()
+            st.sidebar.success("Workspace ID fetched successfully!")
+        except Exception as e:
+            st.sidebar.error(f"Failed to fetch Workspace ID: {str(e)}")
+            return False
+
+        # Step 3: Get Project IDs
+        try:
+            update_progress(15, "Fetching Project IDs...")
+            await GetProjectId()
+            st.sidebar.success("Project IDs fetched successfully!")
+        except Exception as e:
+            st.sidebar.error(f"Failed to fetch Project IDs: {str(e)}")
+            return False
+
+        # Step 4: Get All Data
+        try:
+            update_progress(20, "Fetching All Data...")
+            veridiafinishing, veridiastructure, veridiaexternal, veridialift, veridiacommonarea = await GetAllDatas()
+            st.session_state.veridiafinishing = veridiafinishing
+            st.session_state.veridiastructure = veridiastructure
+            st.session_state.veridiaexternal = veridiaexternal  
+            st.session_state.veridialift = veridialift
+            st.session_state.veridiacommonarea = veridiacommonarea
+            st.sidebar.success("All Data fetched successfully!")
+            safe_log(f"Stored veridiafinishing: {len(veridiafinishing)} records, veridiastructure: {len(veridiastructure)} records, veridiaexternal: {len(veridiaexternal)} records, veridialift: {len(veridialift)} records, veridia_common_area: {len(veridiacommonarea)} records")
+        except Exception as e:
+            st.sidebar.error(f"Failed to fetch All Data: {str(e)}")
+            safe_log(f"Failed to fetch All Data: {str(e)}", "error")
+            return False
+
+        # Step 5: Get Activity Data
+        try:
+            update_progress(40, "Fetching Activity Data...")
+            finishing_activity_data, structure_activity_data, external_activity_data, lift_activity_data, common_area_activity_data = await Get_Activity()
+            # Validate DataFrames
+            activity_dataframes = {
+                "finishing_activity_data": finishing_activity_data,
+                "structure_activity_data": structure_activity_data,
+                "external_activity_data": external_activity_data,
+                "lift_activity_data": lift_activity_data,
+                "common_area_activity_data": common_area_activity_data
+            }
+            for name, df in activity_dataframes.items():
+                if df is None:
+                    safe_log(f"{name} is None", "error")
+                    raise ValueError(f"{name} is None")
+                if not isinstance(df, pd.DataFrame):
+                    safe_log(f"{name} is not a DataFrame: {type(df)}", "error")
+                    raise ValueError(f"{name} is not a valid DataFrame")
+                safe_log(f"{name} has {len(df)} records, empty: {df.empty}")
+                if df.empty:
+                    safe_log(f"{name} is empty", "warning")
+            # Store in session state
+            st.session_state.finishing_activity_data = finishing_activity_data
+            st.session_state.structure_activity_data = structure_activity_data
+            st.session_state.external_activity_data = external_activity_data
+            st.session_state.lift_activity_data = lift_activity_data
+            st.session_state.common_area_activity_data = common_area_activity_data
+            st.sidebar.success("Activity Data fetched successfully!")
+            safe_log(f"Stored activity data - Finishing: {len(finishing_activity_data)} records, "
+                        f"Structure: {len(structure_activity_data)} records, "
+                        f"External: {len(external_activity_data)} records, "
+                        f"Lift: {len(lift_activity_data)} records, "
+                        f"Common Area: {len(common_area_activity_data)} records")
+        except Exception as e:
+            st.sidebar.error(f"Failed to fetch Activity Data: {str(e)}")
+            safe_log(f"Failed to fetch Activity Data: {str(e)}\nStack trace:\n{traceback.format_exc()}", "error")
+            return False
+
+        # Step 6: Get Location/Module Data
+        try:
+            update_progress(60, "Fetching Location/Module Data...")
+            finishing_location_data, structure_location_data, external_location_data, lift_location_data, common_area_location_data = await Get_Location()
+            # Validate DataFrames
+            location_dataframes = {
+                "finishing_location_data": finishing_location_data,
+                "structure_location_data": structure_location_data,
+                "external_location_data": external_location_data,
+                "lift_location_data": lift_location_data,
+                "common_area_location_data": common_area_location_data
+            }
+            for name, df in location_dataframes.items():
+                if df is None:
+                    safe_log(f"{name} is None", "error")
+                    raise ValueError(f"{name} is None")
+                if not isinstance(df, pd.DataFrame):
+                    safe_log(f"{name} is not a DataFrame: {type(df)}", "error")
+                    raise ValueError(f"{name} is not a valid DataFrame")
+                safe_log(f"{name} has {len(df)} records, empty: {df.empty}")
+                if df.empty:
+                    safe_log(f"{name} is empty", "warning")
+            # Store in session state
+            st.session_state.finishing_location_data = finishing_location_data
+            st.session_state.structure_location_data = structure_location_data
+            st.session_state.external_location_data = external_location_data
+            st.session_state.lift_location_data = lift_location_data
+            st.session_state.common_area_location_data = common_area_location_data
+            st.sidebar.success("Location/Module Data fetched successfully!")
+            safe_log(f"Stored location data - Finishing: {len(finishing_location_data)} records, "
+                        f"Structure: {len(structure_location_data)} records, "
+                        f"External: {len(external_location_data)} records, "
+                        f"Lift: {len(lift_location_data)} records, "
+                        f"Common Area: {len(common_area_location_data)} records")
+        except Exception as e:
+            st.sidebar.error(f"Failed to fetch Location/Module Data: {str(e)}")
+            safe_log(f"Failed to fetch Location/Module Data: {str(e)}\nStack trace:\n{traceback.format_exc()}", "error")
+            return False
+        
+        # Step 7: Fetch COS Files
+        try:
+            update_progress(80, "Fetching COS files from Veridia folder...")
+            files = get_cos_files()
+            st.session_state.files = files
+            if files:
+                st.success(f"Found {len(files)} files in COS storage")
+                for selected_file in files:
+                    try:
+                        safe_log(f"Processing file: {selected_file}")
+                        cos_client = initialize_cos_client()
+                        if not cos_client:
+                            st.error("Failed to initialize COS client")
+                            continue
+                        response = cos_client.get_object(Bucket=COS_BUCKET, Key=selected_file)
+                        file_bytes = io.BytesIO(response['Body'].read())
+                        result = process_file(file_bytes, selected_file)
+                        if len(result) == 2:  # Handle Tower 4 split
+                            (df_first, tname_first), (df_second, tname_second) = result
+                            if df_first is not None and not df_first.empty:
+                                if "Tower 4(A)" in tname_first:
+                                    st.session_state.cos_df_tower4a = df_first
+                                    st.session_state.cos_tname_tower4a = tname_first
+                                    safe_log(f"Processed Data for {tname_first} - {len(df_first)} rows")
+                                elif "Tower 4(B)" in tname_first:
+                                    st.session_state.cos_df_tower4b = df_first
+                                    st.session_state.cos_tname_tower4b = tname_first
+                                    safe_log(f"Processed Data for {tname_first} - {len(df_first)} rows")
+                                elif "Tower 5" in tname_first:
+                                    st.session_state.cos_df_tower5 = df_first
+                                    st.session_state.cos_tname_tower5 = tname_first
+                                    safe_log(f"Processed Data for {tname_first} - {len(df_first)} rows")
+                            if df_second is not None and not df_second.empty:
+                                if "Tower 4(A)" in tname_second:
+                                    st.session_state.cos_df_tower4a = df_second
+                                    st.session_state.cos_tname_tower4a = tname_second
+                                    safe_log(f"Processed Data for {tname_second} - {len(df_second)} rows")
+                                elif "Tower 4(B)" in tname_second:
+                                    st.session_state.cos_df_tower4b = df_second
+                                    st.session_state.cos_tname_tower4b = tname_second
+                                    safe_log(f"Processed Data for {tname_second} - {len(df_second)} rows")
+                        elif len(result) == 1:  # Handle Tower 5
+                            (df_first, tname_first) = result[0]
+                            if df_first is not None and not df_first.empty:
+                                if "Tower 4(A)" in tname_first:
+                                    st.session_state.cos_df_tower4a = df_first
+                                    st.session_state.cos_tname_tower4a = tname_first
+                                    safe_log(f"Processed Data for {tname_first} - {len(df_first)} rows")
+                                elif "Tower 4(B)" in tname_first:
+                                    st.session_state.cos_df_tower4b = df_first
+                                    st.session_state.cos_tname_tower4b = tname_first
+                                    safe_log(f"Processed Data for {tname_first} - {len(df_first)} rows")
+                                elif "Tower 5" in tname_first:
+                                    st.session_state.cos_df_tower5 = df_first
+                                    st.session_state.cos_tname_tower5 = tname_first
+                                    safe_log(f"Processed Data for {tname_first} - {len(df_first)} rows")
+                            if "Tower 5" in selected_file:
+                                safe_log("Processed Tower 5 data successfully")
+                            else:
+                                safe_log(f"No secondary data (Tower 4 split) for {selected_file}", "warning")
+                        else:
+                            safe_log(f"Unexpected result format for {selected_file}", "warning")
+                    except Exception as e:
+                        safe_log(f"Error processing file {selected_file}: {str(e)}", "error")
+                        continue
+            else:
+                st.warning("No files found in COS storage")
+        except Exception as e:
+            st.sidebar.error(f"Failed to fetch COS files: {str(e)}")
+            safe_log(f"Failed to fetch COS files: {str(e)}", "error")
+            return False
+
+        update_progress(100, "Initialization completed!")
+        st.sidebar.success("All data fetched successfully!")
+        return True
+
+
 
