@@ -9,3 +9,4 @@ ibm-cos-sdk
 tenacity
 xlsxwriter
 openpyxl
+demjson3
