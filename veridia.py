@@ -32,7 +32,6 @@ from datetime import date
 import concurrent.futures
 from dateutil.relativedelta import relativedelta
 from veridia1 import ProcessVeridia
-import demjson3  # type: ignore
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -3746,6 +3745,3 @@ async def initialize_and_fetch_data(email, password):
         update_progress(100, "Initialization completed!")
         st.sidebar.success("All data fetched successfully!")
         return True
-
-
-
