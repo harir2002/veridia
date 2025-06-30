@@ -120,6 +120,11 @@ def initialize_session_state():
         st.session_state.progress = 0
         st.session_state.current_step = ""
         st.session_state.data_fetch_complete = False
+        
+        # Download tracking
+        st.session_state.download_ready = False
+        st.session_state.excel_file_ready = None
+        st.session_state.excel_file_name = None
 
 # Call initialization at the start
 initialize_session_state()
@@ -147,6 +152,43 @@ def safe_log(message, level="info"):
         logger.warning(message)
     elif level == "debug":
         logger.debug(message)
+
+# Function to clear session state after download
+def clear_session_state_after_download():
+    """Clear all session state variables after Excel download to prevent app refresh"""
+    try:
+        # Clear all session state variables
+        keys_to_clear = [
+            'initialized', 'sessionid', 'workspaceid',
+            'veridiafinishing', 'veridiastructure', 'veridiaexternal', 'veridialift', 'veridiacommonarea',
+            'finishing_activity_data', 'structure_activity_data', 'external_activity_data',
+            'lift_activity_data', 'common_area_activity_data',
+            'finishing_location_data', 'structure_location_data', 'external_location_data',
+            'lift_location_data', 'common_area_location_data',
+            'cos_df_tower4a', 'cos_df_tower4b', 'cos_df_tower5', 'cos_df_tower7',
+            'cos_tname_tower4a', 'cos_tname_tower4b', 'cos_tname_tower5', 'cos_tname_tower7',
+            'cos_client', 'bucket_name', 'file_list',
+            'slabreport', 'slab_df',
+            'ignore_month', 'ignore_year',
+            'ai_response', 'progress', 'current_step', 'data_fetch_complete',
+            'download_ready', 'excel_file_ready', 'excel_file_name'
+        ]
+        
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+        
+        safe_log("Session state cleared successfully after download")
+        st.success("✅ Session cleared successfully! You can now start fresh.")
+        
+    except Exception as e:
+        safe_log(f"Error clearing session state: {str(e)}", "error")
+        st.error(f"Error clearing session state: {str(e)}")
+
+# Check if download was ready and clear session state automatically
+if st.session_state.get('download_ready', False):
+    clear_session_state_after_download()
+    st.rerun()
 
 # Forward declaration to fix "name not defined" error
 async def initialize_and_fetch_data(email, password):
@@ -2941,6 +2983,9 @@ st.markdown(
 # Show progress if data fetching is in progress
 show_progress()
 
+# Remove session state indicator and clear all data button
+# (Removed code)
+
 st.sidebar.title("🔒Asite Initialization")
 email = st.sidebar.text_input("Email", "impwatson@gadieltechnologies.com", key="email_input")
 password = st.sidebar.text_input("Password", "Srihari@790$", type="password", key="password_input")
@@ -3510,17 +3555,25 @@ def run_analysis_and_display():
             timestamp = pd.Timestamp.now(tz='Asia/Kolkata').strftime('%Y%m%d_%H%M')
             file_name = f"Consolidated_Checklist_Veridia_{timestamp}.xlsx"
             
+            # Store the Excel file in session state for download
+            st.session_state.excel_file_ready = excel_file
+            st.session_state.excel_file_name = file_name
+            st.session_state.download_ready = True
+            
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
                 st.sidebar.download_button(
                     label="📥 Download Checklist Excel",
-                    data=excel_file,
-                    file_name=file_name,
+                    data=st.session_state.excel_file_ready,
+                    file_name=st.session_state.excel_file_name,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="download_excel_button",
                     help="Click to download the consolidated checklist in Excel format."
                 )
             st.success("Excel file generated successfully! Click the button above to download.")
+            
+            # Show message about automatic session clearing
+            st.info("ℹ️ Session will be automatically cleared after download to prevent app refresh.")
         else:
             st.error("Failed to generate Excel file. Please check the logs for details.")
 
@@ -3532,6 +3585,38 @@ st.sidebar.title("📊 Status Analysis")
 
 if st.sidebar.button("Analyze and Display Activity Counts"):
     run_analysis_and_display()
+
+# Function to clear session state after download
+def clear_session_state_after_download():
+    """Clear all session state variables after Excel download to prevent app refresh"""
+    try:
+        # Clear all session state variables
+        keys_to_clear = [
+            'initialized', 'sessionid', 'workspaceid',
+            'veridiafinishing', 'veridiastructure', 'veridiaexternal', 'veridialift', 'veridiacommonarea',
+            'finishing_activity_data', 'structure_activity_data', 'external_activity_data',
+            'lift_activity_data', 'common_area_activity_data',
+            'finishing_location_data', 'structure_location_data', 'external_location_data',
+            'lift_location_data', 'common_area_location_data',
+            'cos_df_tower4a', 'cos_df_tower4b', 'cos_df_tower5', 'cos_df_tower7',
+            'cos_tname_tower4a', 'cos_tname_tower4b', 'cos_tname_tower5', 'cos_tname_tower7',
+            'cos_client', 'bucket_name', 'file_list',
+            'slabreport', 'slab_df',
+            'ignore_month', 'ignore_year',
+            'ai_response', 'progress', 'current_step', 'data_fetch_complete',
+            'download_ready', 'excel_file_ready', 'excel_file_name'
+        ]
+        
+        for key in keys_to_clear:
+            if key in st.session_state:
+                del st.session_state[key]
+        
+        safe_log("Session state cleared successfully after download")
+        st.success("✅ Session cleared successfully! You can now start fresh.")
+        
+    except Exception as e:
+        safe_log(f"Error clearing session state: {str(e)}", "error")
+        st.error(f"Error clearing session state: {str(e)}")
 
 st.sidebar.title("📊 Slab Cycle")
 st.session_state.ignore_year = st.sidebar.number_input("Ignore Year", min_value=1900, max_value=2100, value=2023, step=1, key="ignore_year1")
