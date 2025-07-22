@@ -126,7 +126,6 @@ def initialize_session_state():
         st.session_state.excel_file_ready = None
         st.session_state.excel_file_name = None
 
-# Call initialization at the start
 initialize_session_state()
 
 # Progress tracking functions
@@ -3618,9 +3617,8 @@ def clear_session_state_after_download():
         safe_log(f"Error clearing session state: {str(e)}", "error")
         st.error(f"Error clearing session state: {str(e)}")
 
-st.sidebar.title("📊 Slab Cycle")
-st.session_state.ignore_year = st.sidebar.number_input("Ignore Year", min_value=1900, max_value=2100, value=2023, step=1, key="ignore_year1")
-st.session_state.ignore_month = st.sidebar.number_input("Ignore Month", min_value=1, max_value=12, value=3, step=1, key="ignore_month1")
+st.session_state.ignore_year = datetime.now().year
+st.session_state.ignore_month = datetime.now().month
 
 # Combined function for Initialize All Data and Fetch COS
 async def initialize_and_fetch_data(email, password):
