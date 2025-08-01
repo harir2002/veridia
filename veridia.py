@@ -120,12 +120,8 @@ def initialize_session_state():
         st.session_state.progress = 0
         st.session_state.current_step = ""
         st.session_state.data_fetch_complete = False
-        
-        # Download tracking
-        st.session_state.download_ready = False
-        st.session_state.excel_file_ready = None
-        st.session_state.excel_file_name = None
 
+# Call initialization at the start
 initialize_session_state()
 
 # Progress tracking functions
@@ -151,43 +147,6 @@ def safe_log(message, level="info"):
         logger.warning(message)
     elif level == "debug":
         logger.debug(message)
-
-# Function to clear session state after download
-def clear_session_state_after_download():
-    """Clear all session state variables after Excel download to prevent app refresh"""
-    try:
-        # Clear all session state variables
-        keys_to_clear = [
-            'initialized', 'sessionid', 'workspaceid',
-            'veridiafinishing', 'veridiastructure', 'veridiaexternal', 'veridialift', 'veridiacommonarea',
-            'finishing_activity_data', 'structure_activity_data', 'external_activity_data',
-            'lift_activity_data', 'common_area_activity_data',
-            'finishing_location_data', 'structure_location_data', 'external_location_data',
-            'lift_location_data', 'common_area_location_data',
-            'cos_df_tower4a', 'cos_df_tower4b', 'cos_df_tower5', 'cos_df_tower7',
-            'cos_tname_tower4a', 'cos_tname_tower4b', 'cos_tname_tower5', 'cos_tname_tower7',
-            'cos_client', 'bucket_name', 'file_list',
-            'slabreport', 'slab_df',
-            'ignore_month', 'ignore_year',
-            'ai_response', 'progress', 'current_step', 'data_fetch_complete',
-            'download_ready', 'excel_file_ready', 'excel_file_name'
-        ]
-        
-        for key in keys_to_clear:
-            if key in st.session_state:
-                del st.session_state[key]
-        
-        safe_log("Session state cleared successfully after download")
-        st.success("✅ Session cleared successfully! You can now start fresh.")
-        
-    except Exception as e:
-        safe_log(f"Error clearing session state: {str(e)}", "error")
-        st.error(f"Error clearing session state: {str(e)}")
-
-# Check if download was ready and clear session state automatically
-if st.session_state.get('download_ready', False):
-    clear_session_state_after_download()
-    st.rerun()
 
 # Forward declaration to fix "name not defined" error
 async def initialize_and_fetch_data(email, password):
@@ -2500,11 +2459,11 @@ def generatePrompt(combined_data, slab):
 
             Categories and Activities:
             COS:
-            - MEP: EL-First Fix, UP-First Fix, CP-First Fix, Min. count of UP-First Fix and CP-First Fix, C-Gypsum and POP Punning, EL-Second Fix, Concreting, Electrical
-            - Interior Finishing: Installation of doors, Waterproofing Works, Wall Tiling, Floor Tiling
-            - ED Civil: Sewer Line, Storm Line, GSB, WMM, Stamp Concrete, Saucer drain, Kerb Stone
+            - MEP: EL-First Fix, UP-First Fix, CP-First Fix, Min. count of UP-First Fix and CP-First Fix, C-Gypsum and POP Punning, EL-Second Fix, 
+            - Interior Finishing: Installation of doors, Waterproofing Works, Wall Tiling, Floor Tiling , Installation of doors,  Water Proofing Works
+            - ED Civil: Sewer Line, Storm Line, GSB, WMM, Stamp Concrete, Saucer drain, Kerb Stone, Stamp Concrete
             Asite:
-            - MEP: Wall Conducting, Plumbing Works, POP & Gypsum Plaster, Wiring & Switch Socket, Slab Conducting, Electrical Cable, Concreting
+            - MEP: Wall Conducting, Plumbing Works, POP & Gypsum Plaster, Wiring & Switch Socket, Slab Conducting, 
             - Interior Finishing: Door/Window Frame, Waterproofing - Sunken, Wall Tiling, Floor Tiling, Door/Window Shutter
             - ED Civil: Sewer Line, Rain Water/Storm Line, Granular Sub-base, WMM, Saucer drain/Paver block, Kerb Stone, Concreting
 
@@ -2525,9 +2484,7 @@ def generatePrompt(combined_data, slab):
                         {{"Activity Name": "CP-First Fix", "Total": 0}},
                         {{"Activity Name": "Min. count of UP-First Fix and CP-First Fix", "Total": 0}},
                         {{"Activity Name": "C-Gypsum and POP Punning", "Total": 0}},
-                        {{"Activity Name": "EL-Second Fix", "Total": 0}},
-                        {{"Activity Name": "Concreting", "Total": 0}},
-                        {{"Activity Name": "Electrical", "Total": 0}}
+                        {{"Activity Name": "EL-Second Fix", "Total": 0}}
                       ]
                     }},
                     {{
@@ -2548,7 +2505,8 @@ def generatePrompt(combined_data, slab):
                         {{"Activity Name": "WMM", "Total": 0}},
                         {{"Activity Name": "Stamp Concrete", "Total": 0}},
                         {{"Activity Name": "Saucer drain", "Total": 0}},
-                        {{"Activity Name": "Kerb Stone", "Total": 0}}
+                        {{"Activity Name": "Kerb Stone", "Total": 0}},
+                        {{"Activity Name": "Stamp Concrete", "Total": 0}}
                       ]
                     }}
                   ]
@@ -2568,8 +2526,6 @@ def generatePrompt(combined_data, slab):
                         {{"Activity Name": "POP & Gypsum Plaster", "Total": 0}},
                         {{"Activity Name": "Wiring & Switch Socket", "Total": 0}},
                         {{"Activity Name": "Slab Conducting", "Total": 0}},
-                        {{"Activity Name": "Electrical Cable", "Total": 0}},
-                        {{"Activity Name": "Concreting", "Total": 0}}
                       ]
                     }},
                     {{
@@ -2590,7 +2546,8 @@ def generatePrompt(combined_data, slab):
                         {{"Activity Name": "Granular Sub-base", "Total": 0}},
                         {{"Activity Name": "WMM", "Total": 0}},
                         {{"Activity Name": "Saucer drain/Paver block", "Total": 0}},
-                        {{"Activity Name": "Kerb Stone", "Total": 0}}
+                        {{"Activity Name": "Kerb Stone", "Total": 0}},
+                        {{"Activity Name": "Concrete", "Total": 0}}
                       ]
                     }}
                   ]
@@ -2982,9 +2939,6 @@ st.markdown(
 # Show progress if data fetching is in progress
 show_progress()
 
-# Remove session state indicator and clear all data button
-# (Removed code)
-
 st.sidebar.title("🔒Asite Initialization")
 email = st.sidebar.text_input("Email", "impwatson@gadieltechnologies.com", key="email_input")
 password = st.sidebar.text_input("Password", "Srihari@790$", type="password", key="password_input")
@@ -3282,11 +3236,25 @@ def generate_consolidated_Checklist_excel(ai_data):
             if activity_name == "Concreting":
                 logger.info(f"CONCRETING DEBUG - Tower: {tower_name}, Category: {category}, COS Count: {cos_count}, Asite Count: {asite_count}")
             
-            open_missing_override = cos_data["open_missing"] if cos_data["open_missing"] is not None else asite_data["open_missing"]
-            if open_missing_override is not None:
-                open_missing_count = open_missing_override
+            # MODIFIED: Handle different scenarios for Open/Missing calculation
+            if cos_count == 0:
+                # If completed work is 0, set open/missing to 0 (no calculation needed)
+                open_missing_count = 0
+                logger.info(f"No calculation for {tower_name} - {activity_name}: Completed Work is 0, setting Open/Missing to 0")
+            elif asite_count > cos_count:
+                # If closed checklist is greater than completed work, set open/missing to 0
+                open_missing_count = 0
+                logger.info(f"Closed checklist ({asite_count}) > Completed work ({cos_count}) for {tower_name} - {activity_name}: setting Open/Missing to 0")
             else:
-                open_missing_count = abs(cos_count - asite_count)
+                # Normal calculation when completed work >= closed checklist
+                open_missing_override = cos_data["open_missing"] if cos_data["open_missing"] is not None else asite_data["open_missing"]
+                if open_missing_override is not None:
+                    open_missing_count = open_missing_override
+                    logger.info(f"Using override value {open_missing_override} for {tower_name} - {activity_name}")
+                else:
+                    open_missing_count = cos_count - asite_count  # Use subtraction instead of abs() for proper calculation
+                    logger.info(f"Calculated Open/Missing: {cos_count} - {asite_count} = {open_missing_count} for {tower_name} - {activity_name}")
+            
             in_progress_count = 0
             consolidated_rows.append({
                 "Tower": tower_name,
@@ -3383,8 +3351,6 @@ def generate_consolidated_Checklist_excel(ai_data):
                         cell.alignment = center_alignment
                     current_row += 1
 
-            
-
                 total_open_missing = cat_group["Open/Missing check list"].sum()
                 worksheet1.cell(row=current_row, column=6).value = f"TOTAL pending checklist"
                 worksheet1.cell(row=current_row, column=10).value = total_open_missing
@@ -3410,7 +3376,7 @@ def generate_consolidated_Checklist_excel(ai_data):
             adjusted_width = (max_length + 2)
             worksheet1.column_dimensions[column].width = adjusted_width
 
-        # Create Sheet 2: Summary Checklist
+        # Create Sheet 2: Summary Checklist - FIXED VERSION
         worksheet2 = workbook.create_sheet(title="Checklist June")
         current_row = 1
 
@@ -3434,58 +3400,103 @@ def generate_consolidated_Checklist_excel(ai_data):
             cell.alignment = center_alignment
         current_row += 1
 
-        # Categorize towers into Civil and MEP
+        # FIXED: Improved category mapping function with more specific mappings
         def map_category_to_type(category):
-            if category in ["Civil Works", "Structure Works"]:
+            """Map categories to Civil or MEP with more precise logic"""
+            # Normalize category name for comparison
+            category_lower = category.lower()
+            
+            if category in ["Civil Works"]:
                 return "Civil"
-            elif category in ["MEP Works", "Interior Finishing Works"]:
+            elif category in ["MEP Works"]:
                 return "MEP"
-            elif category == "External Development":
-                return "Civil"  # Assuming External Development is Civil
+            elif "civil" in category_lower or "structure" in category_lower or "external" in category_lower:
+                return "Civil"
+            elif "mep" in category_lower or "interior" in category_lower or "finishing" in category_lower:
+                return "MEP"
             else:
+                # Log unknown categories for debugging
+                logger.warning(f"Unknown category '{category}' - defaulting to Civil")
                 return "Civil"  # Default to Civil if unknown
 
-        # Aggregate open/missing counts by tower and type (Civil/MEP)
+        # FIXED: Better aggregation logic that preserves tower structure
         summary_data = {}
+        
+        # Debug: Log all unique categories found
+        unique_categories = df['Category'].unique()
+        logger.info(f"All unique categories found: {unique_categories}")
+        
         for _, row in df.iterrows():
             tower = row["Tower"]
             category = row["Category"]
             open_missing = row["Open/Missing check list"]
             
-            # Convert tower name to display format (e.g., "T4A" -> "Veridia-Tower 04 A")
+            # Skip rows with zero open/missing counts if needed
+            if open_missing == 0:
+                continue
+                
+            # Convert tower name to display format
             if "External Development" in category:
                 site_name = f"External Development-{tower}"
             else:
-                tower_num = tower[1:]  # Remove 'T' prefix
-                if len(tower_num) == 1:
-                    tower_num = f"0{tower_num}"  # Pad single digits (e.g., "T2" -> "02")
-                site_name = f"Veridia-Tower {tower_num}"
+                # Handle tower naming more carefully
+                if tower.startswith("T"):
+                    tower_num = tower[1:]  # Remove 'T' prefix
+                    
+                    # Handle towers with A/B suffix (like T4A, T4B)
+                    if tower_num[-1].isalpha():
+                        base_num = tower_num[:-1]
+                        suffix = tower_num[-1]
+                        if len(base_num) == 1:
+                            base_num = f"0{base_num}"  # Pad single digits
+                        site_name = f"Veridia-Tower {base_num} {suffix}"
+                    else:
+                        if len(tower_num) == 1:
+                            tower_num = f"0{tower_num}"  # Pad single digits
+                        site_name = f"Veridia-Tower {tower_num}"
+                else:
+                    site_name = f"Veridia-{tower}"  # Fallback for non-standard tower names
 
             type_ = map_category_to_type(category)
             
+            # Initialize site data if not exists
             if site_name not in summary_data:
                 summary_data[site_name] = {"Civil": 0, "MEP": 0}
             
+            # Add the count to appropriate type
             summary_data[site_name][type_] += open_missing
-
-        logger.info(f"Summary data for Sheet 2: {summary_data}")
-
-        # Write summary data to Sheet 2
-        for site_name, counts in sorted(summary_data.items()):
-            civil_count = counts["Civil"]
-            mep_count = counts["MEP"]
-            total_count = civil_count + mep_count
             
-            worksheet2.cell(row=current_row, column=1).value = site_name
-            worksheet2.cell(row=current_row, column=2).value = civil_count
-            worksheet2.cell(row=current_row, column=3).value = mep_count
-            worksheet2.cell(row=current_row, column=4).value = total_count
-            
-            for col in range(1, 5):
-                cell = worksheet2.cell(row=current_row, column=col)
-                cell.border = border
-                cell.alignment = center_alignment
-            current_row += 1
+            # Debug logging for each aggregation
+            logger.info(f"Added {open_missing} to {site_name} - {type_} (from category: {category})")
+
+        logger.info(f"Final summary data for Sheet 2: {summary_data}")
+
+        # FIXED: Handle case where no data exists
+        if not summary_data:
+            logger.warning("No summary data found for Sheet 2")
+            worksheet2.cell(row=current_row, column=1).value = "No data available"
+            worksheet2.cell(row=current_row, column=2).value = 0
+            worksheet2.cell(row=current_row, column=3).value = 0
+            worksheet2.cell(row=current_row, column=4).value = 0
+        else:
+            # Write summary data to Sheet 2
+            for site_name, counts in sorted(summary_data.items()):
+                civil_count = counts["Civil"]
+                mep_count = counts["MEP"]
+                total_count = civil_count + mep_count
+                
+                # Only add rows with non-zero totals
+                if total_count > 0:
+                    worksheet2.cell(row=current_row, column=1).value = site_name
+                    worksheet2.cell(row=current_row, column=2).value = civil_count
+                    worksheet2.cell(row=current_row, column=3).value = mep_count
+                    worksheet2.cell(row=current_row, column=4).value = total_count
+                    
+                    for col in range(1, 5):
+                        cell = worksheet2.cell(row=current_row, column=col)
+                        cell.border = border
+                        cell.alignment = center_alignment
+                    current_row += 1
 
         # Adjust column widths for Sheet 2
         for col in worksheet2.columns:
@@ -3511,7 +3522,6 @@ def generate_consolidated_Checklist_excel(ai_data):
         logger.error(f"Error generating consolidated Excel: {str(e)}", exc_info=True)
         st.error(f"❌ Error generating Excel file: {str(e)}")
         return None
-
 
 def run_analysis_and_display():
     try:
@@ -3554,25 +3564,17 @@ def run_analysis_and_display():
             timestamp = pd.Timestamp.now(tz='Asia/Kolkata').strftime('%Y%m%d_%H%M')
             file_name = f"Consolidated_Checklist_Veridia_{timestamp}.xlsx"
             
-            # Store the Excel file in session state for download
-            st.session_state.excel_file_ready = excel_file
-            st.session_state.excel_file_name = file_name
-            st.session_state.download_ready = True
-            
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
                 st.sidebar.download_button(
                     label="📥 Download Checklist Excel",
-                    data=st.session_state.excel_file_ready,
-                    file_name=st.session_state.excel_file_name,
+                    data=excel_file,
+                    file_name=file_name,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key="download_excel_button",
                     help="Click to download the consolidated checklist in Excel format."
                 )
             st.success("Excel file generated successfully! Click the button above to download.")
-            
-            # Show message about automatic session clearing
-            st.info("ℹ️ Session will be automatically cleared after download to prevent app refresh.")
         else:
             st.error("Failed to generate Excel file. Please check the logs for details.")
 
@@ -3584,38 +3586,6 @@ st.sidebar.title("📊 Status Analysis")
 
 if st.sidebar.button("Analyze and Display Activity Counts"):
     run_analysis_and_display()
-
-# Function to clear session state after download
-def clear_session_state_after_download():
-    """Clear all session state variables after Excel download to prevent app refresh"""
-    try:
-        # Clear all session state variables
-        keys_to_clear = [
-            'initialized', 'sessionid', 'workspaceid',
-            'veridiafinishing', 'veridiastructure', 'veridiaexternal', 'veridialift', 'veridiacommonarea',
-            'finishing_activity_data', 'structure_activity_data', 'external_activity_data',
-            'lift_activity_data', 'common_area_activity_data',
-            'finishing_location_data', 'structure_location_data', 'external_location_data',
-            'lift_location_data', 'common_area_location_data',
-            'cos_df_tower4a', 'cos_df_tower4b', 'cos_df_tower5', 'cos_df_tower7',
-            'cos_tname_tower4a', 'cos_tname_tower4b', 'cos_tname_tower5', 'cos_tname_tower7',
-            'cos_client', 'bucket_name', 'file_list',
-            'slabreport', 'slab_df',
-            'ignore_month', 'ignore_year',
-            'ai_response', 'progress', 'current_step', 'data_fetch_complete',
-            'download_ready', 'excel_file_ready', 'excel_file_name'
-        ]
-        
-        for key in keys_to_clear:
-            if key in st.session_state:
-                del st.session_state[key]
-        
-        safe_log("Session state cleared successfully after download")
-        st.success("✅ Session cleared successfully! You can now start fresh.")
-        
-    except Exception as e:
-        safe_log(f"Error clearing session state: {str(e)}", "error")
-        st.error(f"Error clearing session state: {str(e)}")
 
 st.session_state.ignore_year = datetime.now().year
 st.session_state.ignore_month = datetime.now().month
@@ -3828,3 +3798,5 @@ async def initialize_and_fetch_data(email, password):
         update_progress(100, "Initialization completed!")
         st.sidebar.success("All data fetched successfully!")
         return True
+
+
